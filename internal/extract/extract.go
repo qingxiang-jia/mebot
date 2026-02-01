@@ -18,6 +18,8 @@ func FromHTML(r io.Reader) (string, error) {
 	}
 
 	var sb strings.Builder
+	hasTitle := false
+	hasSubtitle := false
 
 	// Helper to extract from a selection
 	extractFrom := func(s *goquery.Selection) {
@@ -26,14 +28,28 @@ func FromHTML(r io.Reader) (string, error) {
 
 		// 1. Article Title (h1) -> ## Title
 		title := strings.TrimSpace(s.Find("h1").First().Text())
-		if title != "" {
+		if title == "" && !hasTitle {
+			// Fallback to document h1 if not in article
+			title = strings.TrimSpace(doc.Find("h1").First().Text())
+		}
+		if title != "" && !hasTitle {
 			sb.WriteString(fmt.Sprintf("## %s\n\n", title))
+			hasTitle = true
 		}
 
 		// 2. Subtitle (first h2) -> Paragraph
 		subtitle := strings.TrimSpace(s.Find("h2").First().Text())
-		if subtitle != "" {
+		// WSJ specific: avoid utility headers inside article as subtitles
+		if subtitle == "What to Read Next" || subtitle == "Videos" {
+			subtitle = ""
+		}
+		if subtitle == "" && !hasSubtitle {
+			// Fallback to first non-header/nav h2 in document
+			subtitle = strings.TrimSpace(doc.Find("h2").Not("header h2, nav h2, footer h2, [role='navigation'] h2, [role='banner'] h2, [role='contentinfo'] h2").First().Text())
+		}
+		if subtitle != "" && !hasSubtitle {
 			sb.WriteString(fmt.Sprintf("%s\n\n", subtitle))
+			hasSubtitle = true
 		}
 
 		// 3. Paragraphs
