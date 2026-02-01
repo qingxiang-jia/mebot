@@ -22,7 +22,7 @@ Mebot is a commandline tool that automates my daily workflow. It probably won't 
 
 Similar process, except the command is: `mebot economist`.
 
-### Track Spending
+## Track Spending
 
 ```bash
 > mebot spending
