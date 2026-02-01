@@ -11,13 +11,15 @@ import (
 // FromHTML extracts text from specific elements inside <article>.
 // It formats <h1> as ## Title, the first <h2> as a paragraph,
 // and preserves <p data-component="paragraph"> structure.
-func FromHTML(r io.Reader) (string, error) {
+// It returns the full formatted text and the extracted title (without markdown).
+func FromHTML(r io.Reader) (string, string, error) {
 	doc, err := goquery.NewDocumentFromReader(r)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var sb strings.Builder
+	var mainTitle string
 	hasTitle := false
 	hasSubtitle := false
 
@@ -33,6 +35,7 @@ func FromHTML(r io.Reader) (string, error) {
 			title = strings.TrimSpace(doc.Find("h1").First().Text())
 		}
 		if title != "" && !hasTitle {
+			mainTitle = title
 			sb.WriteString(fmt.Sprintf("## %s\n\n", title))
 			hasTitle = true
 		}
@@ -92,5 +95,5 @@ func FromHTML(r io.Reader) (string, error) {
 		extractFrom(doc.Find("body"))
 	}
 
-	return strings.TrimSpace(sb.String()), nil
+	return strings.TrimSpace(sb.String()), mainTitle, nil
 }

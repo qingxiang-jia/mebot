@@ -77,7 +77,7 @@ func handleReading(source string) error {
 				return fmt.Errorf("failed to open %s: %w", file, err)
 			}
 			
-			text, err := extract.FromHTML(f)
+			text, title, err := extract.FromHTML(f)
 			f.Close() // Close explicitly
 			
 			if err != nil {
@@ -86,6 +86,11 @@ func handleReading(source string) error {
 			}
 
 			if text != "" {
+				if title != "" {
+					fmt.Printf("Processed: %s\n", title)
+				} else {
+					fmt.Printf("Processed: %s (no title found)\n", file)
+				}
 				sb.WriteString(text)
 				sb.WriteString("\n\n")
 				processedCount++
