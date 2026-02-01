@@ -70,6 +70,7 @@ func handleReading(source string) error {
 	var articleContent string
 	if hasHTML {
 		var sb strings.Builder
+		processedCount := 0
 		for _, file := range files {
 			f, err := os.Open(file)
 			if err != nil {
@@ -87,6 +88,9 @@ func handleReading(source string) error {
 			if text != "" {
 				sb.WriteString(text)
 				sb.WriteString("\n\n")
+				processedCount++
+			} else {
+				fmt.Printf("Warning: no content extracted from %s. Is it a valid article?\n", file)
 			}
 		}
 		articleContent = sb.String()
@@ -96,6 +100,9 @@ func handleReading(source string) error {
 			if err := appendToFile("new.md", articleContent); err != nil {
 				return fmt.Errorf("failed to write to new.md: %w", err)
 			}
+			fmt.Printf("Successfully extracted %d article(s) to new.md\n", processedCount)
+		} else {
+			fmt.Println("No content extracted from any HTML files.")
 		}
 
 		// Move HTML files to deleted

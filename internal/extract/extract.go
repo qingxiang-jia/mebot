@@ -18,9 +18,10 @@ func FromHTML(r io.Reader) (string, error) {
 	}
 
 	var sb strings.Builder
-	
-	doc.Find("article").Each(func(i int, s *goquery.Selection) {
-		// Remove script and style tags to be safe, though specific selectors below help avoid them.
+
+	// Helper to extract from a selection
+	extractFrom := func(s *goquery.Selection) {
+		// Remove script and style tags to be safe
 		s.Find("script, style").Remove()
 
 		// 1. Article Title (h1) -> ## Title
@@ -35,29 +36,45 @@ func FromHTML(r io.Reader) (string, error) {
 			sb.WriteString(fmt.Sprintf("%s\n\n", subtitle))
 		}
 
-		// 3. Paragraphs (p[data-component="paragraph"])
-		// If that specific attribute isn't found, we might fall back to 'section p'?
-		// But for now, let's stick to the requirements and the observed HTML structure.
-		// We'll also look for just 'p' inside 'section' if the data-component is missing,
-		// to be more robust across different WSJ/Economist templates if they differ.
-		// However, the prompt asked to "preserve paragraph structure", implying the generic
-		// text extraction was losing it.
-		
-		// Let's try the specific selector first.
-		paragraphs := s.Find("p[data-component=\"paragraph\"]")
-		if paragraphs.Length() == 0 {
-			// Fallback: sections often contain the text in WSJ/Economist
-			paragraphs = s.Find("section p")
+		// 3. Paragraphs
+		// Try specific selectors first, then fallback
+		selectors := []string{
+			"p[data-component=\"paragraph\"]",
+			"section p",
+			"article p",
+			"div[class*=\"article\"] p",
+			"p",
 		}
 
-		paragraphs.Each(func(j int, p *goquery.Selection) {
-			text := strings.TrimSpace(p.Text())
-			if text != "" {
-				sb.WriteString(text)
-				sb.WriteString("\n\n")
+		var paragraphs *goquery.Selection
+		for _, selector := range selectors {
+			paragraphs = s.Find(selector)
+			if paragraphs.Length() > 0 {
+				break
 			}
+		}
+
+		if paragraphs != nil {
+			paragraphs.Each(func(j int, p *goquery.Selection) {
+				text := strings.TrimSpace(p.Text())
+				if text != "" {
+					// Avoid duplicates if selectors overlap
+					sb.WriteString(text)
+					sb.WriteString("\n\n")
+				}
+			})
+		}
+	}
+
+	articles := doc.Find("article")
+	if articles.Length() > 0 {
+		articles.Each(func(i int, s *goquery.Selection) {
+			extractFrom(s)
 		})
-	})
+	} else {
+		// Fallback to the whole body if no article tag is found
+		extractFrom(doc.Find("body"))
+	}
 
 	return strings.TrimSpace(sb.String()), nil
 }
