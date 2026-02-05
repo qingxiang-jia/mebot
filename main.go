@@ -76,10 +76,10 @@ func handleReading(source string) error {
 			if err != nil {
 				return fmt.Errorf("failed to open %s: %w", file, err)
 			}
-			
+
 			text, title, err := extract.FromHTML(f)
 			f.Close() // Close explicitly
-			
+
 			if err != nil {
 				fmt.Printf("Warning: failed to extract from %s: %v\n", file, err)
 				continue
@@ -219,7 +219,7 @@ func getNextSaturday(t time.Time) time.Time {
 	// "Coming Saturday" usually implies the future.
 	// Let's assume if today is Saturday, we mean next Saturday (7 days later).
 	// If today is Friday, it's tomorrow.
-	
+
 	daysUntilSaturday := (6 - int(t.Weekday()) + 7) % 7
 	if daysUntilSaturday == 0 {
 		daysUntilSaturday = 7
@@ -245,7 +245,7 @@ func moveFile(src, dst string) error {
 	ext := filepath.Ext(dst)
 	name := strings.TrimSuffix(filepath.Base(dst), ext)
 	dir := filepath.Dir(dst)
-	
+
 	counter := 1
 	for {
 		if _, err := os.Stat(finalDst); os.IsNotExist(err) {
@@ -261,73 +261,78 @@ func moveFile(src, dst string) error {
 // --- Spending Logic ---
 
 type SpendingTx struct {
-	Date   time.Time
-	Amount float64
-	Source string // "CIBC", "TD", "Sheet"
+	Date        time.Time
+	Amount      float64
+	Source      string // "CIBC", "TD", "Sheet"
+	Description string
 }
 
 func handleSpending() error {
 	var bankTxs []SpendingTx
+	var cibcFiles, tdFiles []string
+	var sheetFile string
 
-	// 1. Process CIBC JSON files
-	jsonFiles, err := filepath.Glob("*.json")
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read directory: %w", err)
 	}
-	for _, file := range jsonFiles {
-		// Ignore package files or configs if any (e.g. dprint.json, cibc.json might be config? 
-		// No, cibc.json is likely data based on content).
-		// But checking content is safer.
-		// For now, assuming all .json are CIBC data except known configs.
-		if file == "dprint.json" || file == "package.json" {
+
+	foundSheet := false
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		
+		name := entry.Name()
+		if strings.HasPrefix(name, "cibc") && strings.HasSuffix(name, ".json") {
+			cibcFiles = append(cibcFiles, name)
+		} else if strings.HasPrefix(name, "td") && strings.HasSuffix(name, ".csv") {
+			tdFiles = append(tdFiles, name)
+		} else if name == "sheet.csv" {
+			sheetFile = name
+			foundSheet = true
+		}
+	}
+
+	if !foundSheet {
+		fmt.Println("Warning: 'sheet.csv' not found. Terminating.")
+		return nil
+	}
+
+	// 1. Process CIBC JSON files
+	for _, file := range cibcFiles {
 		f, err := os.Open(file)
 		if err != nil {
 			return err
 		}
 		txs, err := cibc.Read(f)
 		f.Close()
-		
+
 		if err != nil {
 			fmt.Printf("Skipping %s: %v\n", file, err)
 			continue
 		}
-		
+
 		for _, t := range txs {
-			bankTxs = append(bankTxs, SpendingTx{Date: t.Date, Amount: t.Amount, Source: "CIBC"})
+			bankTxs = append(bankTxs, SpendingTx{Date: t.Date, Amount: t.Amount, Description: t.Description, Source: "CIBC"})
 		}
 	}
 
 	// 2. Process TD CSV files
-	csvFiles, err := filepath.Glob("*.csv")
-	if err != nil {
-		return err
-	}
-	
-	// Need to distinguish TD csv from sheet.csv
-	sheetFile := "sheet.csv"
-	
-	for _, file := range csvFiles {
-		if file == sheetFile {
-			continue
-		}
-		
+	for _, file := range tdFiles {
 		f, err := os.Open(file)
 		if err != nil {
 			return err
 		}
 		txs, err := td.Read(f)
 		f.Close()
-		
+
 		if err != nil {
 			fmt.Printf("Skipping %s: %v\n", file, err)
 			continue
 		}
-		
+
 		for _, t := range txs {
-			bankTxs = append(bankTxs, SpendingTx{Date: t.Date, Amount: t.Amount, Source: "TD"})
+			bankTxs = append(bankTxs, SpendingTx{Date: t.Date, Amount: t.Amount, Description: t.Description, Source: "TD"})
 		}
 	}
 
@@ -337,62 +342,75 @@ func handleSpending() error {
 		return fmt.Errorf("error reading sheet.csv: %w", err)
 	}
 
-	// 4. Compare
-	// "Entries already filled will be shown; entries to be added will be output as csv"
-	
-	// Helper to match transactions. 
-	// Simple matching: Date and Amount match.
-	// Note: Date comparison needs care (ignore time component).
-	
-	fmt.Println("---", "Checking Transactions", "---")
-	
-	var newTxs []SpendingTx
-	
-	// Create a map/multiset of sheet transactions for matching
-	// Key: "YYYY-MM-DD|Amount" -> count
-	sheetMap := make(map[string]int)
+	// 4. Compare transactions
+	var addedTxs, updatedTxs, missingTxs []SpendingTx
+
+	sheetMap := make(map[string][]SpendingTx)
 	for _, t := range sheetTxs {
 		key := fmt.Sprintf("%s|%.2f", t.Date.Format("2006-01-02"), t.Amount)
-		sheetMap[key]++
+		sheetMap[key] = append(sheetMap[key], t)
 	}
 
 	for _, bankTx := range bankTxs {
 		key := fmt.Sprintf("%s|%.2f", bankTx.Date.Format("2006-01-02"), bankTx.Amount)
-		if count, ok := sheetMap[key]; ok && count > 0 {
-			fmt.Printf("Found in sheet: %s %.2f (%s)\n", bankTx.Date.Format("2006-01-02"), bankTx.Amount, bankTx.Source)
-			sheetMap[key]--
+		if txs, ok := sheetMap[key]; ok && len(txs) > 0 {
+			updatedTxs = append(updatedTxs, bankTx)
+			sheetMap[key] = txs[1:]
 		} else {
-			newTxs = append(newTxs, bankTx)
+			addedTxs = append(addedTxs, bankTx)
 		}
 	}
 
-	if len(newTxs) > 0 {
-		fmt.Println("\n---", "New Entries (Copy to Sheet)", "---")
-		// Output as CSV
-		w := csv.NewWriter(os.Stdout)
-		for _, tx := range newTxs {
-			w.Write([]string{
-				tx.Date.Format("2006-01-02"),
-				fmt.Sprintf("%.2f", tx.Amount),
-				tx.Source, // Optional, helpful
-			})
-		}
-		w.Flush()
-	} else {
-		fmt.Println("\nNo new entries found.")
+	for _, txs := range sheetMap {
+		missingTxs = append(missingTxs, txs...)
 	}
 
-	// 5. Move files to deleted
+	// 5. Display results
+	if len(addedTxs) > 0 {
+		fmt.Println("\n--- New Transactions (Added) ---")
+		for _, tx := range addedTxs {
+			fmt.Printf("Date: %s, Amount: %.2f, Description: %s, Source: %s\n", tx.Date.Format("2006-01-02"), tx.Amount, tx.Description, tx.Source)
+		}
+	}
+
+	if len(updatedTxs) > 0 {
+		fmt.Println("\n--- Existing Transactions (Description Updated) ---")
+		for _, tx := range updatedTxs {
+			fmt.Printf("Date: %s, Amount: %.2f, Description: %s, Source: %s\n", tx.Date.Format("2006-01-02"), tx.Amount, tx.Description, tx.Source)
+		}
+	}
+
+	if len(missingTxs) > 0 {
+		fmt.Println("\n--- Missing Transactions (Warning) ---")
+		for _, tx := range missingTxs {
+			fmt.Printf("Date: %s, Amount: %.2f, Description: %s\n", tx.Date.Format("2006-01-02"), tx.Amount, tx.Description)
+		}
+	}
+
+	// 6. Display full transaction list
+	fullTxs := append(sheetTxs, addedTxs...)
+	fmt.Println("\n--- Full Transaction List ---")
+	w := csv.NewWriter(os.Stdout)
+	w.Write([]string{"Date", "Amount", "Description", "Source"})
+	for _, tx := range fullTxs {
+		w.Write([]string{
+			tx.Date.Format("2006-01-02"),
+			fmt.Sprintf("%.2f", tx.Amount),
+			tx.Description,
+			tx.Source,
+		})
+	}
+	w.Flush()
+
+	// 7. Move files to deleted
 	if err := os.MkdirAll("deleted", 0755); err != nil {
 		return err
 	}
-	
-	for _, file := range jsonFiles {
-		if file == "dprint.json" { continue }
+
+	for _, file := range cibcFiles {
 		moveFile(file, filepath.Join("deleted", file))
 	}
-	for _, file := range csvFiles {
-		if file == sheetFile { continue }
+	for _, file := range tdFiles {
 		moveFile(file, filepath.Join("deleted", file))
 	}
 
@@ -407,27 +425,24 @@ func readSheet(filename string) ([]SpendingTx, error) {
 	defer f.Close()
 
 	r := csv.NewReader(f)
-
-rows, err := r.ReadAll()
+	rows, err := r.ReadAll()
 	if err != nil {
 		return nil, err
 	}
 
 	var result []SpendingTx
 	for _, row := range rows {
-		// Try to find Date and Amount columns.
-		// Assuming Date is col 0, Amount is col 1 for now based on "date, and amount" description.
 		if len(row) < 2 {
 			continue
 		}
-		
-		// Attempt to parse date formats
-	
-dateStr := row[0]
-	
-amountStr := row[1]
-	
-		// Try common formats
+
+		dateStr := row[0]
+		amountStr := row[1]
+		var description string
+		if len(row) > 2 {
+			description = row[2]
+		}
+
 		formats := []string{"2006-01-02", "01/02/2006", "1/2/2006", "2006/01/02"}
 		var parsedDate time.Time
 		var dErr error
@@ -438,18 +453,17 @@ amountStr := row[1]
 			}
 		}
 		if dErr != nil {
-			// Skip if not a date (maybe header)
 			continue
 		}
-		
+
 		amountStr = strings.ReplaceAll(amountStr, "$", "")
 		amountStr = strings.ReplaceAll(amountStr, ",", "")
 		amount, aErr := strconv.ParseFloat(amountStr, 64)
 		if aErr != nil {
 			continue
 		}
-		
-		result = append(result, SpendingTx{Date: parsedDate, Amount: amount, Source: "Sheet"})
+
+		result = append(result, SpendingTx{Date: parsedDate, Amount: amount, Description: description, Source: "Sheet"})
 	}
 	return result, nil
 }
