@@ -7,16 +7,16 @@ import (
 )
 
 type Transaction struct {
-	Date   time.Time
-	Amount float64
+	Date        time.Time
+	Amount      float64
 	Description string
 }
 
 type jsonTransaction struct {
-	Date   string   `json:"date"`
-	Debit  *float64 `json:"debit"`
-	Credit *float64 `json:"credit"`
-	Description string `json:"transactionDescription"`
+	Date        string   `json:"date"`
+	Debit       *float64 `json:"debit"`
+	Credit      *float64 `json:"credit"`
+	Description string   `json:"transactionDescription"`
 }
 
 type jsonRoot struct {
@@ -46,8 +46,8 @@ func Read(r io.Reader) ([]Transaction, error) {
 		}
 
 		result = append(result, Transaction{
-			Date:   parsedDate,
-			Amount: amount,
+			Date:        parsedDate,
+			Amount:      amount,
 			Description: t.Description,
 		})
 	}
