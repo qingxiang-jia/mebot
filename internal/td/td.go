@@ -8,8 +8,9 @@ import (
 )
 
 type Transaction struct {
-	Date   time.Time
-	Amount float64
+	Date        time.Time
+	Amount      float64
+	Description string
 }
 
 // Read parses the TD CSV data and returns a slice of Transactions.
@@ -18,7 +19,7 @@ type Transaction struct {
 func Read(r io.Reader) ([]Transaction, error) {
 	reader := csv.NewReader(r)
 	// Allow variable number of fields if necessary, though sample implies fixed.
-	// reader.FieldsPerRecord = -1 
+	// reader.FieldsPerRecord = -1
 
 	rows, err := reader.ReadAll()
 	if err != nil {
@@ -32,6 +33,7 @@ func Read(r io.Reader) ([]Transaction, error) {
 		}
 
 		dateStr := row[0]
+		descStr := row[1]
 		debitStr := row[2]
 		creditStr := row[3]
 
@@ -57,8 +59,9 @@ func Read(r io.Reader) ([]Transaction, error) {
 		}
 
 		result = append(result, Transaction{
-			Date:   parsedDate,
-			Amount: amount,
+			Date:        parsedDate,
+			Amount:      amount,
+			Description: descStr,
 		})
 	}
 	return result, nil
