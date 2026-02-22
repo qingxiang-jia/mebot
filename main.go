@@ -126,7 +126,7 @@ func handleReading(source string) error {
 	if hasSummary {
 		b, err := os.ReadFile("summary.md")
 		if err == nil {
-			summaryContent = string(b)
+			summaryContent = extractSummary(string(b))
 		}
 	}
 
@@ -162,36 +162,16 @@ func updateTargetFile(filename, articleContent, summaryContent string) error {
 
 	// If file is empty or new
 	if content == "" {
-		if summaryContent != "" {
-			content += "# Summary\n\n" + summaryContent + "\n\n"
-		}
 		if articleContent != "" {
 			content += "# Full Text\n\n" + articleContent + "\n\n"
+		}
+		if summaryContent != "" {
+			content += "# Summary\n\n" + summaryContent + "\n\n"
 		}
 		return os.WriteFile(filename, []byte(content), 0644)
 	}
 
 	// File exists.
-	// Check for # Summary
-	if summaryContent != "" {
-		if strings.Contains(content, "# Summary") {
-			parts := strings.SplitN(content, "# Summary", 2)
-			// Append to the section. Find start of next section or end.
-			nextHeaderIdx := strings.Index(parts[1], "\n# ")
-			if nextHeaderIdx != -1 {
-				pre := parts[1][:nextHeaderIdx]
-				post := parts[1][nextHeaderIdx:]
-				parts[1] = pre + "\n\n" + summaryContent + post
-			} else {
-				parts[1] = parts[1] + "\n\n" + summaryContent
-			}
-			content = parts[0] + "# Summary" + parts[1]
-		} else {
-			// Prepend Summary section
-			content = "# Summary\n\n" + summaryContent + "\n\n" + content
-		}
-	}
-
 	// Check for # Full Text
 	if articleContent != "" {
 		if strings.Contains(content, "# Full Text") {
@@ -211,7 +191,60 @@ func updateTargetFile(filename, articleContent, summaryContent string) error {
 		}
 	}
 
+	// Check for # Summary
+	if summaryContent != "" {
+		if strings.Contains(content, "# Summary") {
+			parts := strings.SplitN(content, "# Summary", 2)
+			// Append to the section. Find start of next section or end.
+			nextHeaderIdx := strings.Index(parts[1], "\n# ")
+			if nextHeaderIdx != -1 {
+				pre := parts[1][:nextHeaderIdx]
+				post := parts[1][nextHeaderIdx:]
+				parts[1] = pre + "\n\n" + summaryContent + post
+			} else {
+				parts[1] = parts[1] + "\n\n" + summaryContent
+			}
+			content = parts[0] + "# Summary" + parts[1]
+		} else {
+			// Append Summary section (now after Full Text if it exists)
+			if strings.HasSuffix(content, "\n") {
+				content = content + "\n# Summary\n\n" + summaryContent
+			} else {
+				content = content + "\n\n# Summary\n\n" + summaryContent
+			}
+		}
+	}
+
 	return os.WriteFile(filename, []byte(content), 0644)
+}
+
+func extractSummary(raw string) string {
+	// Find all level 2 markdown titles and their content
+	lines := strings.Split(raw, "\n")
+	var sb strings.Builder
+	inSection := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			inSection = true
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			continue
+		}
+		if inSection {
+			// If we hit a level 1 header, stop the current section
+			if strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "## ") {
+				inSection = false
+				continue
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+	if sb.Len() == 0 {
+		return strings.TrimSpace(raw)
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func getNextSaturday(t time.Time) time.Time {
