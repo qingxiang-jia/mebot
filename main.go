@@ -87,7 +87,7 @@ func handleReading(source string) error {
 
 			if text != "" {
 				if title != "" {
-					fmt.Printf("Processed: %s\n", title)
+					fmt.Printf("%s\n", title)
 				} else {
 					fmt.Printf("Processed: %s (no title found)\n", file)
 				}
