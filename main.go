@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,24 @@ func main() {
 }
 
 // --- Daily Reading Logic ---
+
+func findLatestDatedFile(source string) (string, bool) {
+	// The pattern looks for files starting with a date and ending with the source and .md
+	pattern := "????-??-?? " + source + ".md"
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", false
+	}
+	if len(files) == 0 {
+		return "", false
+	}
+
+	// Sort files by name. Since format is YYYY-MM-DD, this works for finding the latest.
+	sort.Strings(files)
+
+	// The last file in the sorted list is the most recent one.
+	return files[len(files)-1], true
+}
 
 func handleReading(source string) error {
 	// 0. Check if new.md already exists
@@ -132,8 +151,11 @@ func handleReading(source string) error {
 
 	// 2. Update YYYY-MM-DD <Source>.md
 	if articleContent != "" || summaryContent != "" {
-		targetDate := getNextSaturday(time.Now())
-		targetFilename := fmt.Sprintf("%s %s.md", targetDate.Format("2006-01-02"), source)
+		targetFilename, found := findLatestDatedFile(source)
+		if !found {
+			targetDate := getNextSaturday(time.Now())
+			targetFilename = fmt.Sprintf("%s %s.md", targetDate.Format("2006-01-02"), source)
+		}
 
 		if err := updateTargetFile(targetFilename, articleContent, summaryContent); err != nil {
 			return fmt.Errorf("failed to update %s: %w", targetFilename, err)
