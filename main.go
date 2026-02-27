@@ -1,24 +1,19 @@
 package main
 
 import (
-	"encoding/csv"
 	"fmt"
 	"log"
+	"mebot/internal/extract"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
-
-	"mebot/internal/cibc"
-	"mebot/internal/extract"
-	"mebot/internal/td"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: mebot <command> [wsj|economist|spending]")
+		fmt.Println("Usage: mebot <command> [wsj|economist]")
 		os.Exit(1)
 	}
 
@@ -31,10 +26,6 @@ func main() {
 	case "economist":
 		if err := handleReading("Economist"); err != nil {
 			log.Fatalf("Error processing Economist: %v", err)
-		}
-	case "spending":
-		if err := handleSpending(); err != nil {
-			log.Fatalf("Error processing spending: %v", err)
 		}
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
@@ -311,214 +302,4 @@ func moveFile(src, dst string) error {
 	}
 
 	return os.Rename(src, finalDst)
-}
-
-// --- Spending Logic ---
-
-type SpendingTx struct {
-	Date        time.Time
-	Amount      float64
-	Source      string // "CIBC", "TD", "Sheet"
-	Description string
-}
-
-func handleSpending() error {
-	var bankTxs []SpendingTx
-	var cibcFiles, tdFiles []string
-	var sheetFile string
-
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		return fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	foundSheet := false
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if strings.HasPrefix(name, "cibc") && strings.HasSuffix(name, ".json") {
-			cibcFiles = append(cibcFiles, name)
-		} else if strings.HasPrefix(name, "td") && strings.HasSuffix(name, ".csv") {
-			tdFiles = append(tdFiles, name)
-		} else if name == "sheet.csv" {
-			sheetFile = name
-			foundSheet = true
-		}
-	}
-
-	if !foundSheet {
-		fmt.Println("Warning: 'sheet.csv' not found. Terminating.")
-		return nil
-	}
-
-	// 1. Process CIBC JSON files
-	for _, file := range cibcFiles {
-		f, err := os.Open(file)
-		if err != nil {
-			return err
-		}
-		txs, err := cibc.Read(f)
-		f.Close()
-
-		if err != nil {
-			fmt.Printf("Skipping %s: %v\n", file, err)
-			continue
-		}
-
-		for _, t := range txs {
-			bankTxs = append(bankTxs, SpendingTx{Date: t.Date, Amount: t.Amount, Description: t.Description, Source: "CIBC"})
-		}
-	}
-
-	// 2. Process TD CSV files
-	for _, file := range tdFiles {
-		f, err := os.Open(file)
-		if err != nil {
-			return err
-		}
-		txs, err := td.Read(f)
-		f.Close()
-
-		if err != nil {
-			fmt.Printf("Skipping %s: %v\n", file, err)
-			continue
-		}
-
-		for _, t := range txs {
-			bankTxs = append(bankTxs, SpendingTx{Date: t.Date, Amount: t.Amount, Description: t.Description, Source: "TD"})
-		}
-	}
-
-	// 3. Read sheet.csv
-	sheetTxs, err := readSheet(sheetFile)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("error reading sheet.csv: %w", err)
-	}
-
-	// 4. Compare transactions
-	var addedTxs, updatedTxs, missingTxs []SpendingTx
-
-	sheetMap := make(map[string][]SpendingTx)
-	for _, t := range sheetTxs {
-		key := fmt.Sprintf("%s|%.2f", t.Date.Format("2006-01-02"), t.Amount)
-		sheetMap[key] = append(sheetMap[key], t)
-	}
-
-	for _, bankTx := range bankTxs {
-		key := fmt.Sprintf("%s|%.2f", bankTx.Date.Format("2006-01-02"), bankTx.Amount)
-		if txs, ok := sheetMap[key]; ok && len(txs) > 0 {
-			updatedTxs = append(updatedTxs, bankTx)
-			sheetMap[key] = txs[1:]
-		} else {
-			addedTxs = append(addedTxs, bankTx)
-		}
-	}
-
-	for _, txs := range sheetMap {
-		missingTxs = append(missingTxs, txs...)
-	}
-
-	// 5. Display results
-	if len(addedTxs) > 0 {
-		fmt.Println("\n--- New Transactions (Added) ---")
-		for _, tx := range addedTxs {
-			fmt.Printf("Date: %s, Amount: %.2f, Description: %s, Source: %s\n", tx.Date.Format("2006-01-02"), tx.Amount, tx.Description, tx.Source)
-		}
-	}
-
-	if len(updatedTxs) > 0 {
-		fmt.Println("\n--- Existing Transactions (Description Updated) ---")
-		for _, tx := range updatedTxs {
-			fmt.Printf("Date: %s, Amount: %.2f, Description: %s, Source: %s\n", tx.Date.Format("2006-01-02"), tx.Amount, tx.Description, tx.Source)
-		}
-	}
-
-	if len(missingTxs) > 0 {
-		fmt.Println("\n--- Missing Transactions (Warning) ---")
-		for _, tx := range missingTxs {
-			fmt.Printf("Date: %s, Amount: %.2f, Description: %s\n", tx.Date.Format("2006-01-02"), tx.Amount, tx.Description)
-		}
-	}
-
-	// 6. Display full transaction list
-	fullTxs := append(sheetTxs, addedTxs...)
-	fmt.Println("\n--- Full Transaction List ---")
-	w := csv.NewWriter(os.Stdout)
-	w.Write([]string{"Date", "Amount", "Description", "Source"})
-	for _, tx := range fullTxs {
-		w.Write([]string{
-			tx.Date.Format("2006-01-02"),
-			fmt.Sprintf("%.2f", tx.Amount),
-			tx.Description,
-			tx.Source,
-		})
-	}
-	w.Flush()
-
-	// 7. Move files to deleted
-	if err := os.MkdirAll("deleted", 0755); err != nil {
-		return err
-	}
-
-	for _, file := range cibcFiles {
-		moveFile(file, filepath.Join("deleted", file))
-	}
-	for _, file := range tdFiles {
-		moveFile(file, filepath.Join("deleted", file))
-	}
-
-	return nil
-}
-
-func readSheet(filename string) ([]SpendingTx, error) {
-	f, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	rows, err := r.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	var result []SpendingTx
-	for _, row := range rows {
-		if len(row) < 2 {
-			continue
-		}
-
-		dateStr := row[0]
-		amountStr := row[1]
-		var description string
-		if len(row) > 2 {
-			description = row[2]
-		}
-
-		formats := []string{"2006-01-02", "01/02/2006", "1/2/2006", "2006/01/02"}
-		var parsedDate time.Time
-		var dErr error
-		for _, layout := range formats {
-			parsedDate, dErr = time.Parse(layout, dateStr)
-			if dErr == nil {
-				break
-			}
-		}
-		if dErr != nil {
-			continue
-		}
-
-		amountStr = strings.ReplaceAll(amountStr, "$", "")
-		amountStr = strings.ReplaceAll(amountStr, ",", "")
-		amount, aErr := strconv.ParseFloat(amountStr, 64)
-		if aErr != nil {
-			continue
-		}
-
-		result = append(result, SpendingTx{Date: parsedDate, Amount: amount, Description: description, Source: "Sheet"})
-	}
-	return result, nil
 }

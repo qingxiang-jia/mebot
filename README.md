@@ -21,13 +21,3 @@ Mebot is a commandline tool that automates my daily workflow. It probably won't 
 ### The Economist
 
 Similar process, except the command is: `mebot economist`.
-
-## Track Spending
-
-```bash
-> mebot spending
-
-- JSON/CSV files from banks will be processed and moved to a folder called deleted.
-
-- A file named sheet.csv exported from Google Sheet will be used to check (date, and amount) with bank files. Entries already filled will be shown; entries to be added will be output as csv so you can paste into Google Sheet.
-```
