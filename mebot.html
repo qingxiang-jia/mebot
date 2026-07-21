@@ -3499,31 +3499,33 @@
           return;
         }
 
-        let added = 0;
-        let failed = 0;
-
-        for (const file of fileList) {
+        // FileList is live in some browsers, so snapshot it before any async work.
+        // Parse the complete batch before changing project state; otherwise a
+        // second import can render/save an intermediate state and overwrite the
+        // articles from the first batch.
+        const files = Array.from(fileList);
+        const results = await Promise.all(files.map(async (file) => {
           try {
             const text = await file.text();
-            const article = parseHtmlString(text, file.name);
-            if (article) {
-              project.articles.push(article);
-              if (!project.selectedArticleId) project.selectedArticleId = article.id;
-              added++;
-            } else {
-              failed++;
-            }
+            return parseHtmlString(text, file.name);
           } catch (e) {
             console.error(e);
-            failed++;
+            return null;
           }
+        }));
+
+        const articles = results.filter(Boolean);
+        const failed = results.length - articles.length;
+        project.articles.push(...articles);
+        if (!project.selectedArticleId && articles.length) {
+          project.selectedArticleId = articles[0].id;
         }
 
         saveState();
         render();
 
-        if (added && failed) showToast(`Added ${added} article(s), ${failed} failed`);
-        else if (added) showToast(`Added ${added} article(s)`);
+        if (articles.length && failed) showToast(`Added ${articles.length} article(s), ${failed} failed`);
+        else if (articles.length) showToast(`Added ${articles.length} article(s)`);
         else showToast("Could not parse any files", true);
       }
 
