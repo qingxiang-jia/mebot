@@ -58,9 +58,11 @@
       font-family: var(--font);
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
+      height: 100vh;
+      min-height: 0;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
 
     header {
@@ -185,6 +187,8 @@
       display: flex;
       flex-direction: column;
       min-height: 0;
+      min-width: 0;
+      overflow: hidden;
       border-right: 1px solid var(--border);
     }
 
@@ -214,19 +218,56 @@
       letter-spacing: normal;
     }
 
+    .panel-header-action.icon-action {
+      width: 28px;
+      height: 28px;
+      padding: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .panel-header-action.icon-action + .panel-header-action.icon-action {
+      margin-left: 4px;
+    }
+
+    .panel-header-action.icon-action svg {
+      width: 17px;
+      height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
     .article-list {
       list-style: none;
-      overflow-y: auto;
+      overflow: auto;
+      scrollbar-gutter: stable;
       flex: 1;
       min-height: 0;
     }
 
+    .article-list li {
+      display: flex;
+      align-items: stretch;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .article-list li input[type="checkbox"] {
+      flex: 0 0 auto;
+      width: 16px;
+      margin: 0 0 0 12px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
     .article-list li button {
-      width: 100%;
+      flex: 1;
       text-align: left;
       border: none;
       border-radius: 0;
-      border-bottom: 1px solid var(--border);
       padding: 10px 16px;
       background: transparent;
     }
@@ -262,7 +303,9 @@
 
     .article-content {
       flex: 1;
-      overflow-y: auto;
+      overflow: auto;
+      scrollbar-gutter: stable;
+      min-height: 0;
       padding: 16px 20px;
       font-size: 0.9rem;
       line-height: 1.65;
@@ -454,8 +497,26 @@
     <section class="panel article-panel">
       <div class="panel-header">
         <span>Articles</span>
-        <button id="btn-copy-titles" class="panel-header-action" type="button" title="Copy all article titles"
-          disabled>Copy titles</button>
+        <button id="btn-toggle-selection" class="panel-header-action icon-action" type="button"
+          title="Show selection checkboxes" aria-label="Show selection checkboxes">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+            <path d="m8 12 2.5 2.5L16 9"></path>
+          </svg>
+        </button>
+        <button id="btn-copy-titles" class="panel-header-action icon-action" type="button"
+          title="Copy titles" aria-label="Copy titles" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 6h14M12 6v13M8 19h8"></path>
+          </svg>
+        </button>
+        <button id="btn-copy-articles" class="panel-header-action icon-action" type="button"
+          title="Copy articles" aria-label="Copy articles" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="5" y="3" width="14" height="18" rx="1.5"></rect>
+            <path d="M8 8h8M8 12h8M8 16h5"></path>
+          </svg>
+        </button>
       </div>
       <ul class="article-list" id="article-list"></ul>
     </section>
@@ -3282,13 +3343,14 @@
       const THEME_KEY = "article-parser-theme";
 
       /** @typedef {{ id: string, title: string, markdown: string, summary: string, sourceFile: string, parsedAt: number }} Article */
-      /** @typedef {{ id: string, name: string, exportDate: string, articles: Article[], selectedArticleId: string|null, createdAt: number }} Project */
+      /** @typedef {{ id: string, name: string, exportDate: string, articles: Article[], selectedArticleId: string|null, selectedArticleIds?: string[], createdAt: number }} Project */
       /** @typedef {{ projects: Record<string, Project>, activeProjectId: string|null }} AppState */
 
       /** @type {AppState} */
       let state = { projects: {}, activeProjectId: null };
       let summaryMode = "raw";
       let lastSummaryArticleId = null;
+      let selectionMode = false;
 
       const $ = (id) => document.getElementById(id);
 
@@ -3371,6 +3433,7 @@
           exportDate: todayISO(),
           articles: [],
           selectedArticleId: null,
+          selectedArticleIds: [],
           createdAt: Date.now(),
         };
         state.projects[id] = project;
@@ -3731,26 +3794,27 @@
         if (idx === -1) return;
         if (!confirm(`Remove "${project.articles[idx].title}"?`)) return;
         project.articles.splice(idx, 1);
+        if (Array.isArray(project.selectedArticleIds)) {
+          project.selectedArticleIds = project.selectedArticleIds.filter((id) => id !== project.selectedArticleId);
+        }
         project.selectedArticleId = project.articles.length ? project.articles[0].id : null;
         saveState();
         render();
         showToast("Article removed");
       }
 
-      async function copyArticleTitles() {
-        const project = activeProject();
-        if (!project || !project.articles.length) return;
+      function checkedArticles(project) {
+        const selectedIds = new Set(Array.isArray(project.selectedArticleIds) ? project.selectedArticleIds : []);
+        const selected = project.articles.filter((article) => selectedIds.has(article.id));
+        return selected.length ? selected : project.articles;
+      }
 
-        // Keep every title on one line, even if a parser returns a title with line breaks.
-        const titles = project.articles
-          .map((article) => article.title.replace(/[\r\n]+/g, " ").trim())
-          .join("\n");
-
+      async function copyText(text) {
         try {
-          await navigator.clipboard.writeText(titles);
+          await navigator.clipboard.writeText(text);
         } catch (e) {
           const textarea = document.createElement("textarea");
-          textarea.value = titles;
+          textarea.value = text;
           textarea.style.position = "fixed";
           textarea.style.opacity = "0";
           document.body.appendChild(textarea);
@@ -3758,7 +3822,29 @@
           document.execCommand("copy");
           textarea.remove();
         }
-        showToast(`Copied ${project.articles.length} article title(s)`);
+      }
+
+      async function copyArticleTitles() {
+        const project = activeProject();
+        if (!project || !project.articles.length) return;
+
+        // Keep every title on one line, even if a parser returns a title with line breaks.
+        const articles = checkedArticles(project);
+        const titles = articles
+          .map((article) => article.title.replace(/[\r\n]+/g, " ").trim())
+          .join("\n");
+
+        await copyText(titles);
+        showToast(`Copied ${articles.length} article title(s)`);
+      }
+
+      async function copyArticles() {
+        const project = activeProject();
+        if (!project || !project.articles.length) return;
+
+        const articles = checkedArticles(project);
+        await copyText(articles.map((article) => article.markdown).join("\n\n"));
+        showToast(`Copied ${articles.length} article(s)`);
       }
 
       function buildExportMarkdown(project) {
@@ -3840,7 +3926,12 @@
         list.innerHTML = "";
         const project = activeProject();
         const copyButton = $("btn-copy-titles");
+        const copyArticlesButton = $("btn-copy-articles");
+        const selectionButton = $("btn-toggle-selection");
         copyButton.disabled = !project || !project.articles.length;
+        copyArticlesButton.disabled = !project || !project.articles.length;
+        selectionButton.title = selectionMode ? "Hide selection checkboxes" : "Show selection checkboxes";
+        selectionButton.setAttribute("aria-label", selectionButton.title);
 
         if (!project || !project.articles.length) {
           const li = document.createElement("li");
@@ -3854,6 +3945,26 @@
         for (const article of project.articles) {
           const li = document.createElement("li");
           li.draggable = true;
+          let checkbox = null;
+          if (selectionMode) {
+            checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = Array.isArray(project.selectedArticleIds) && project.selectedArticleIds.includes(article.id);
+            checkbox.title = "Select article for copying";
+            checkbox.setAttribute("aria-label", `Select ${article.title} for copying`);
+
+            checkbox.addEventListener("click", (e) => e.stopPropagation());
+            checkbox.addEventListener("change", () => {
+              if (!Array.isArray(project.selectedArticleIds)) project.selectedArticleIds = [];
+              if (checkbox.checked) {
+                if (!project.selectedArticleIds.includes(article.id)) project.selectedArticleIds.push(article.id);
+              } else {
+                project.selectedArticleIds = project.selectedArticleIds.filter((id) => id !== article.id);
+              }
+              saveState();
+            });
+          }
+
           const btn = document.createElement("button");
           btn.type = "button";
           if (article.id === project.selectedArticleId) btn.classList.add("active");
@@ -3904,6 +4015,7 @@
             li.classList.remove("dragging", "drag-over");
           });
 
+          if (checkbox) li.appendChild(checkbox);
           li.appendChild(btn);
           list.appendChild(li);
         }
@@ -4035,7 +4147,14 @@
 
         $("btn-export").addEventListener("click", exportMarkdown);
 
+        $("btn-toggle-selection").addEventListener("click", () => {
+          selectionMode = !selectionMode;
+          renderArticleList();
+        });
+
         $("btn-copy-titles").addEventListener("click", copyArticleTitles);
+
+        $("btn-copy-articles").addEventListener("click", copyArticles);
 
         $("btn-delete-article").addEventListener("click", removeArticle);
 
