@@ -296,6 +296,59 @@
       margin: 0.75em 0;
     }
 
+    .markdown-preview {
+      flex: 1;
+      min-height: 200px;
+      overflow-y: auto;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    .markdown-preview h1,
+    .markdown-preview h2,
+    .markdown-preview h3,
+    .markdown-preview h4,
+    .markdown-preview h5,
+    .markdown-preview h6 {
+      margin: 0 0 0.5em;
+    }
+
+    .markdown-preview p,
+    .markdown-preview ul,
+    .markdown-preview ol,
+    .markdown-preview blockquote,
+    .markdown-preview pre {
+      margin: 0 0 0.75em;
+    }
+
+    .markdown-preview ul,
+    .markdown-preview ol {
+      padding-left: 1.5em;
+    }
+
+    .markdown-preview blockquote {
+      border-left: 3px solid var(--border);
+      padding-left: 12px;
+      color: var(--text-muted);
+    }
+
+    .markdown-preview pre {
+      overflow-x: auto;
+      padding: 10px;
+      background: var(--surface);
+      border-radius: 4px;
+    }
+
+    .summary-raw {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: var(--mono);
+    }
+
     .summary-area {
       flex: 1;
       display: flex;
@@ -366,7 +419,8 @@
       color: var(--danger);
     }
 
-    #file-input {
+    #file-input,
+    #markdown-file-input {
       display: none;
     }
   </style>
@@ -386,6 +440,8 @@
     <div class="file-row">
       <button id="btn-import" class="primary">Import HTML files</button>
       <input type="file" id="file-input" accept=".html,.htm,text/html" multiple>
+      <button id="btn-import-markdown">Import Markdown</button>
+      <input type="file" id="markdown-file-input" accept=".md,text/markdown,text/plain">
       <label for="export-date">Export date</label>
       <input type="date" id="export-date">
       <button id="btn-export" class="primary">Export Markdown</button>
@@ -416,7 +472,10 @@
     </section>
 
     <section class="panel">
-      <div class="panel-header">Summary</div>
+      <div class="panel-header">
+        <span>Summary</span>
+        <button id="btn-summary-mode" class="panel-header-action" type="button" hidden>Show rendered</button>
+      </div>
       <div class="summary-area" id="summary-area">
         <div class="empty-state">Select an article to write a summary.</div>
       </div>
@@ -3228,6 +3287,8 @@
 
       /** @type {AppState} */
       let state = { projects: {}, activeProjectId: null };
+      let summaryMode = "raw";
+      let lastSummaryArticleId = null;
 
       const $ = (id) => document.getElementById(id);
 
@@ -3466,6 +3527,79 @@
         return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
       }
 
+      function markdownToHtml(markdown) {
+        const lines = markdown.split(/\r?\n/);
+        const blocks = [];
+        let i = 0;
+
+        const inlineHtml = (text) => escapeHtml(text)
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+          .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+          .replace(/_([^_]+)_/g, "<em>$1</em>")
+          .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
+            const safeHref = /^(https?:|mailto:)/i.test(href) ? href : "#";
+            return `<a href="${escapeHtml(safeHref)}">${label}</a>`;
+          });
+
+        while (i < lines.length) {
+          const line = lines[i];
+          if (!line.trim()) {
+            i++;
+            continue;
+          }
+
+          if (line.startsWith("```")) {
+            const code = [];
+            i++;
+            while (i < lines.length && !lines[i].startsWith("```")) code.push(lines[i++]);
+            if (i < lines.length) i++;
+            blocks.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+            continue;
+          }
+
+          const heading = line.match(/^(#{1,6})\s+(.+)$/);
+          if (heading) {
+            const level = heading[1].length;
+            blocks.push(`<h${level}>${inlineHtml(heading[2])}</h${level}>`);
+            i++;
+            continue;
+          }
+
+          if (line.startsWith(">")) {
+            const quote = [];
+            while (i < lines.length && lines[i].startsWith(">")) quote.push(lines[i++].replace(/^>\s?/, ""));
+            blocks.push(`<blockquote>${inlineHtml(quote.join("\n"))}</blockquote>`);
+            continue;
+          }
+
+          const listMatch = line.match(/^\s*(-|\*)\s+(.+)|^\s*\d+\.\s+(.+)/);
+          if (listMatch) {
+            const ordered = Boolean(listMatch[3]);
+            const items = [];
+            while (i < lines.length) {
+              const item = lines[i].match(ordered ? /^\s*\d+\.\s+(.+)/ : /^\s*[-*]\s+(.+)/);
+              if (!item) break;
+              items.push(`<li>${inlineHtml(item[1])}</li>`);
+              i++;
+            }
+            blocks.push(`<${ordered ? "ol" : "ul"}>${items.join("")}</${ordered ? "ol" : "ul"}>`);
+            continue;
+          }
+
+          const paragraph = [];
+          while (i < lines.length && lines[i].trim() &&
+            !/^#{1,6}\s+/.test(lines[i]) && !lines[i].startsWith(">") &&
+            !lines[i].startsWith("```") && !/^\s*(-|\*)\s+/.test(lines[i]) &&
+            !/^\s*\d+\.\s+/.test(lines[i])) {
+            paragraph.push(lines[i++]);
+          }
+          blocks.push(`<p>${inlineHtml(paragraph.join("\n")).replace(/\n/g, "<br>")}</p>`);
+        }
+        return blocks.join("");
+      }
+
       function parseHtmlString(htmlString, sourceFile) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(htmlString, "text/html");
@@ -3527,6 +3661,67 @@
         if (articles.length && failed) showToast(`Added ${articles.length} article(s), ${failed} failed`);
         else if (articles.length) showToast(`Added ${articles.length} article(s)`);
         else showToast("Could not parse any files", true);
+      }
+
+      function parseExportedMarkdown(text) {
+        const fullTextStart = text.search(/^# Full Text\s*$/m);
+        const summaryStart = text.search(/^# Summary\s*$/m);
+        if (fullTextStart === -1 || summaryStart === -1 || summaryStart <= fullTextStart) return [];
+
+        const sectionList = (sectionText) => {
+          const lines = sectionText.split(/\r?\n/);
+          const sections = [];
+          let current = null;
+          for (const line of lines) {
+            const heading = line.match(/^##(?!#)\s+(.+?)\s*$/);
+            if (heading) {
+              if (current) current.body = current.body.join("\n").trim();
+              current = { title: heading[1].trim(), body: [] };
+              sections.push(current);
+            } else if (current) {
+              current.body.push(line);
+            }
+          }
+          if (current) current.body = current.body.join("\n").trim();
+          return sections;
+        };
+
+        const fullText = text.slice(fullTextStart, summaryStart).replace(/^# Full Text\s*\r?\n/m, "");
+        const summaries = text.slice(summaryStart).replace(/^# Summary\s*\r?\n/m, "");
+        const summaryByTitle = new Map(sectionList(summaries).map((section) => [section.title, section.body]));
+        const articles = sectionList(fullText);
+
+        return articles.map((article) => ({
+          id: uid(),
+          title: article.title,
+          markdown: `## ${article.title}\n\n${article.body}`.trim(),
+          summary: summaryByTitle.get(article.title) === "_No summary._" ? "" : (summaryByTitle.get(article.title) || ""),
+          sourceFile: "imported Markdown",
+          parsedAt: Date.now(),
+        }));
+      }
+
+      async function importMarkdownFile(file) {
+        const project = activeProject();
+        if (!project) {
+          showToast("Create or select a project first", true);
+          return;
+        }
+        try {
+          const articles = parseExportedMarkdown(await file.text());
+          if (!articles.length) {
+            showToast("That file is not a Mebot Markdown export", true);
+            return;
+          }
+          project.articles.push(...articles);
+          if (!project.selectedArticleId) project.selectedArticleId = articles[0].id;
+          saveState();
+          render();
+          showToast(`Loaded ${articles.length} article(s) from Markdown`);
+        } catch (e) {
+          console.error(e);
+          showToast("Could not read the Markdown file", true);
+        }
       }
 
       function removeArticle() {
@@ -3757,21 +3952,40 @@
         const area = $("summary-area");
         const project = activeProject();
         const article = project?.articles.find((a) => a.id === project.selectedArticleId);
+        const modeButton = $("btn-summary-mode");
 
         if (!article) {
           area.innerHTML = '<div class="empty-state">Select an article to write a summary.</div>';
+          modeButton.hidden = true;
+          lastSummaryArticleId = null;
           return;
         }
 
-        area.innerHTML =
-          `<label for="summary-input">Summary for: ${escapeHtml(article.title)}</label>` +
-          `<textarea id="summary-input" placeholder="Write a summary for this article…">${escapeHtml(article.summary)}</textarea>`;
+        if (article.id !== lastSummaryArticleId) {
+          summaryMode = (article.summary || "").trim() ? "rendered" : "raw";
+          lastSummaryArticleId = article.id;
+        }
 
-        const ta = $("summary-input");
-        ta.addEventListener("input", () => {
-          article.summary = ta.value;
-          saveState();
-        });
+        modeButton.hidden = false;
+        modeButton.textContent = summaryMode === "raw" ? "Show rendered" : "Show raw";
+        modeButton.title = summaryMode === "raw" ? "Render the summary as Markdown" : "Show the summary as plain text";
+        const summary = article.summary || "";
+
+        if (summaryMode === "raw") {
+          area.innerHTML =
+            `<label for="summary-input">Summary for: ${escapeHtml(article.title)}</label>` +
+            `<textarea id="summary-input" placeholder="Write a summary for this article…">${escapeHtml(summary)}</textarea>`;
+
+          const ta = $("summary-input");
+          ta.addEventListener("input", () => {
+            article.summary = ta.value;
+            saveState();
+          });
+        } else {
+          area.innerHTML =
+            `<label id="summary-preview-label">Rendered summary for: ${escapeHtml(article.title)}</label>` +
+            `<div class="markdown-preview" aria-labelledby="summary-preview-label">${markdownToHtml(summary) || '<span style="color:var(--text-muted)">No summary yet.</span>'}</div>`;
+        }
       }
 
       function render() {
@@ -3807,8 +4021,15 @@
 
         $("btn-import").addEventListener("click", () => $("file-input").click());
 
+        $("btn-import-markdown").addEventListener("click", () => $("markdown-file-input").click());
+
         $("file-input").addEventListener("change", (e) => {
           if (e.target.files?.length) importFiles(e.target.files);
+          e.target.value = "";
+        });
+
+        $("markdown-file-input").addEventListener("change", (e) => {
+          if (e.target.files?.length) importMarkdownFile(e.target.files[0]);
           e.target.value = "";
         });
 
@@ -3817,6 +4038,11 @@
         $("btn-copy-titles").addEventListener("click", copyArticleTitles);
 
         $("btn-delete-article").addEventListener("click", removeArticle);
+
+        $("btn-summary-mode").addEventListener("click", () => {
+          summaryMode = summaryMode === "raw" ? "rendered" : "raw";
+          renderSummary();
+        });
 
         $("btn-theme-toggle").addEventListener("click", toggleTheme);
       }
