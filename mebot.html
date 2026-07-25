@@ -292,6 +292,16 @@
       padding-left: 13px;
     }
 
+    .article-list li button.multi-selected {
+      background: #fff0df;
+      border-left: 3px solid #e67e22;
+      padding-left: 13px;
+    }
+
+    [data-theme="dark"] .article-list li button.multi-selected {
+      background: #4a2d16;
+    }
+
     .article-title-text {
       font-weight: 500;
       display: block;
@@ -499,13 +509,6 @@
     <section class="panel article-panel">
       <div class="panel-header">
         <span>Articles</span>
-        <button id="btn-toggle-selection" class="panel-header-action icon-action" type="button"
-          title="Show selection checkboxes" aria-label="Show selection checkboxes">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-            <path d="m8 12 2.5 2.5L16 9"></path>
-          </svg>
-        </button>
         <button id="btn-copy-titles" class="panel-header-action icon-action" type="button"
           title="Copy titles" aria-label="Copy titles" disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3352,8 +3355,6 @@
       let state = { projects: {}, activeProjectId: null };
       let summaryMode = "raw";
       let lastSummaryArticleId = null;
-      let selectionMode = false;
-
       const $ = (id) => document.getElementById(id);
 
       function uid() {
@@ -3931,11 +3932,8 @@
         const project = activeProject();
         const copyButton = $("btn-copy-titles");
         const copyArticlesButton = $("btn-copy-articles");
-        const selectionButton = $("btn-toggle-selection");
         copyButton.disabled = !project || !project.articles.length;
         copyArticlesButton.disabled = !project || !project.articles.length;
-        selectionButton.title = selectionMode ? "Hide selection checkboxes" : "Show selection checkboxes";
-        selectionButton.setAttribute("aria-label", selectionButton.title);
 
         if (!project || !project.articles.length) {
           const li = document.createElement("li");
@@ -3949,36 +3947,33 @@
         for (const article of project.articles) {
           const li = document.createElement("li");
           li.draggable = true;
-          let checkbox = null;
-          if (selectionMode) {
-            checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.checked = Array.isArray(project.selectedArticleIds) && project.selectedArticleIds.includes(article.id);
-            checkbox.title = "Select article for copying";
-            checkbox.setAttribute("aria-label", `Select ${article.title} for copying`);
-
-            checkbox.addEventListener("click", (e) => e.stopPropagation());
-            checkbox.addEventListener("change", () => {
-              if (!Array.isArray(project.selectedArticleIds)) project.selectedArticleIds = [];
-              if (checkbox.checked) {
-                if (!project.selectedArticleIds.includes(article.id)) project.selectedArticleIds.push(article.id);
-              } else {
-                project.selectedArticleIds = project.selectedArticleIds.filter((id) => id !== article.id);
-              }
-              saveState();
-            });
-          }
 
           const btn = document.createElement("button");
           btn.type = "button";
           if (article.id === project.selectedArticleId) btn.classList.add("active");
+          if (Array.isArray(project.selectedArticleIds) && project.selectedArticleIds.includes(article.id)) {
+            btn.classList.add("multi-selected");
+          }
 
           const date = new Date(article.parsedAt).toLocaleDateString();
           btn.innerHTML =
             `<span class="article-title-text">${escapeHtml(article.title)}</span>` +
             `<span class="article-meta">${escapeHtml(article.sourceFile || "imported")} · ${date}</span>`;
 
-          btn.addEventListener("click", () => {
+          btn.addEventListener("click", (e) => {
+            if (e.button === 0 && e.ctrlKey) {
+              if (!Array.isArray(project.selectedArticleIds)) project.selectedArticleIds = [];
+              if (project.selectedArticleIds.includes(article.id)) {
+                project.selectedArticleIds = project.selectedArticleIds.filter((id) => id !== article.id);
+              } else {
+                project.selectedArticleIds.push(article.id);
+              }
+              saveState();
+              renderArticleList();
+              return;
+            }
+
+            project.selectedArticleIds = [];
             project.selectedArticleId = article.id;
             saveState();
             render();
@@ -4019,7 +4014,6 @@
             li.classList.remove("dragging", "drag-over");
           });
 
-          if (checkbox) li.appendChild(checkbox);
           li.appendChild(btn);
           list.appendChild(li);
         }
@@ -4150,11 +4144,6 @@
         });
 
         $("btn-export").addEventListener("click", exportMarkdown);
-
-        $("btn-toggle-selection").addEventListener("click", () => {
-          selectionMode = !selectionMode;
-          renderArticleList();
-        });
 
         $("btn-copy-titles").addEventListener("click", copyArticleTitles);
 
