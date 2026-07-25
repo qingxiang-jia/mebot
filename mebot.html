@@ -3887,7 +3887,7 @@
         saveState();
 
         const md = buildExportMarkdown(project);
-        const filename = `${slugify(project.name)}-${date}.md`;
+        const filename = `${date} ${project.name}.md`;
         const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
