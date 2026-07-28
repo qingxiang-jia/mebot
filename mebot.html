@@ -474,6 +474,42 @@
       color: var(--danger);
     }
 
+    .import-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 200;
+    }
+
+    .import-overlay[hidden] {
+      display: none;
+    }
+
+    .import-dialog {
+      width: min(320px, calc(100vw - 32px));
+      padding: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+      text-align: center;
+    }
+
+    .import-dialog progress {
+      width: 100%;
+      height: 10px;
+      margin-top: 12px;
+      accent-color: var(--accent);
+    }
+
+    .import-progress-label {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
     #file-input,
     #markdown-file-input {
       display: none;
@@ -482,6 +518,13 @@
 </head>
 
 <body>
+  <div id="import-overlay" class="import-overlay" hidden role="dialog" aria-modal="true"
+    aria-labelledby="import-progress-label">
+    <div class="import-dialog">
+      <div id="import-progress-label" class="import-progress-label">Importing…</div>
+      <progress id="import-progress-bar" max="1" value="0"></progress>
+    </div>
+  </div>
   <header>
     <h1>Mebot</h1>
     <div class="project-row">
@@ -3416,6 +3459,17 @@
         showToast._t = setTimeout(() => el.classList.remove("show"), 2800);
       }
 
+      function setImportProgress(completed, total) {
+        $("import-progress-bar").max = total;
+        $("import-progress-bar").value = completed;
+        $("import-progress-label").textContent = `Importing ${completed} of ${total}…`;
+        $("import-overlay").hidden = false;
+      }
+
+      function hideImportProgress() {
+        $("import-overlay").hidden = true;
+      }
+
       function escapeHtml(s) {
         return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       }
@@ -3706,29 +3760,40 @@
         // second import can render/save an intermediate state and overwrite the
         // articles from the first batch.
         const files = Array.from(fileList);
-        const results = await Promise.all(files.map(async (file) => {
-          try {
-            const text = await file.text();
-            return parseHtmlString(text, file.name);
-          } catch (e) {
-            console.error(e);
-            return null;
+        let completed = 0;
+        setImportProgress(0, files.length);
+        try {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          const results = await Promise.all(files.map(async (file) => {
+            try {
+              const text = await file.text();
+              return parseHtmlString(text, file.name);
+            } catch (e) {
+              console.error(e);
+              return null;
+            } finally {
+              completed++;
+              setImportProgress(completed, files.length);
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+          }));
+
+          const articles = results.filter(Boolean);
+          const failed = results.length - articles.length;
+          project.articles.push(...articles);
+          if (!project.selectedArticleId && articles.length) {
+            project.selectedArticleId = articles[0].id;
           }
-        }));
 
-        const articles = results.filter(Boolean);
-        const failed = results.length - articles.length;
-        project.articles.push(...articles);
-        if (!project.selectedArticleId && articles.length) {
-          project.selectedArticleId = articles[0].id;
+          saveState();
+          render();
+
+          if (articles.length && failed) showToast(`Added ${articles.length} article(s), ${failed} failed`);
+          else if (articles.length) showToast(`Added ${articles.length} article(s)`);
+          else showToast("Could not parse any files", true);
+        } finally {
+          hideImportProgress();
         }
-
-        saveState();
-        render();
-
-        if (articles.length && failed) showToast(`Added ${articles.length} article(s), ${failed} failed`);
-        else if (articles.length) showToast(`Added ${articles.length} article(s)`);
-        else showToast("Could not parse any files", true);
       }
 
       function parseExportedMarkdown(text) {
