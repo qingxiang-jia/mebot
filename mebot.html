@@ -72,12 +72,18 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      padding-right: 4px;
     }
 
     header h1 {
       font-size: 1.1rem;
       font-weight: 600;
-      margin-right: 8px;
       white-space: nowrap;
     }
 
@@ -113,8 +119,8 @@
       border: 1px solid var(--border);
       color: var(--text);
       border-radius: var(--radius);
-      padding: 6px 14px;
-      font-size: 0.875rem;
+      padding: 4px 9px;
+      font-size: 0.8rem;
       font-family: inherit;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
@@ -148,24 +154,112 @@
 
     .header-spacer {
       flex: 1;
+      min-width: 8px;
     }
 
     #btn-theme-toggle {
-      white-space: nowrap;
-    }
-
-    .project-row {
-      display: flex;
+      width: 30px;
+      height: 30px;
+      padding: 5px;
+      display: inline-flex;
       align-items: center;
-      gap: 8px;
-      white-space: nowrap;
+      justify-content: center;
     }
 
+    #btn-theme-toggle svg {
+      width: 17px;
+      height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .project-row,
     .file-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 5px;
       white-space: nowrap;
+      min-height: 38px;
+      padding: 4px 6px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .project-row label,
+    .file-row label {
+      padding: 0 4px 0 2px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .project-row select,
+    .project-row input,
+    .file-row input[type="date"] {
+      background: var(--surface);
+    }
+
+    .project-row button,
+    .file-row button {
+      padding: 4px 9px;
+    }
+
+    .project-row {
+      min-width: 90px;
+    }
+
+    .project-row input {
+      width: 140px !important;
+    }
+
+    .file-row {
+      min-width: 0;
+    }
+
+    .appearance-row {
+      display: flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 1180px) {
+      header {
+        gap: 8px;
+      }
+
+      .header-spacer {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      header {
+        padding: 10px 12px;
+      }
+
+      .header-brand {
+        flex: 1 0 100%;
+      }
+
+      .project-row,
+      .file-row,
+      .appearance-row {
+        width: 100%;
+      }
+
+      .file-row {
+        flex: 1 1 100%;
+      }
     }
 
     main {
@@ -526,8 +620,10 @@
     </div>
   </div>
   <header>
-    <h1>Mebot</h1>
-    <div class="project-row">
+    <div class="header-brand">
+      <h1>Mebot</h1>
+    </div>
+    <div class="project-row" aria-label="Project controls">
       <label for="project-select">Project</label>
       <select id="project-select"></select>
       <input type="text" id="project-name" placeholder="Project name" style="width: 160px;">
@@ -535,7 +631,7 @@
       <button id="btn-rename-project">Rename</button>
       <button id="btn-delete-project" class="danger">Delete</button>
     </div>
-    <div class="file-row">
+    <div class="file-row" aria-label="File controls">
       <button id="btn-import" class="primary">Import HTML files</button>
       <input type="file" id="file-input" accept=".html,.htm,text/html" multiple>
       <button id="btn-import-markdown">Import Markdown</button>
@@ -545,7 +641,13 @@
       <button id="btn-export" class="primary">Export Markdown</button>
     </div>
     <div class="header-spacer"></div>
-    <button id="btn-theme-toggle" type="button" title="Toggle dark mode">Dark mode</button>
+    <div class="appearance-row">
+      <button id="btn-theme-toggle" type="button" title="Switch to dark mode" aria-label="Switch to dark mode">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.5 8.5 0 1 0 20.5 15.2Z"></path>
+        </svg>
+      </button>
+    </div>
   </header>
 
   <main>
@@ -3442,8 +3544,9 @@
         localStorage.setItem(THEME_KEY, theme);
         const btn = $("btn-theme-toggle");
         if (btn) {
-          btn.textContent = theme === "dark" ? "Light mode" : "Dark mode";
-          btn.title = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+          const label = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+          btn.title = label;
+          btn.setAttribute("aria-label", label);
         }
       }
 
