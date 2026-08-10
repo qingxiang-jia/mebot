@@ -3877,7 +3877,8 @@
             } finally {
               completed++;
               setImportProgress(completed, files.length);
-              await new Promise((resolve) => setTimeout(resolve, 0));
+              // Small delay to show progress one at a time for better UX
+              await new Promise((resolve) => setTimeout(resolve, 200));
             }
           }));
 
