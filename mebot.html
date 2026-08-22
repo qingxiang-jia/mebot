@@ -3894,23 +3894,24 @@
         // articles from the first batch.
         const files = Array.from(fileList);
         let completed = 0;
+        const results = [];
         setImportProgress(0, files.length);
         try {
           await new Promise((resolve) => requestAnimationFrame(resolve));
-          const results = await Promise.all(files.map(async (file) => {
+          for (const file of files) {
+            let result = null;
             try {
               const text = await file.text();
-              return parseHtmlString(text, file.name);
+              result = parseHtmlString(text, file.name);
             } catch (e) {
               console.error(e);
-              return null;
-            } finally {
-              completed++;
-              setImportProgress(completed, files.length);
-              // Small delay to show progress one at a time for better UX
-              await new Promise((resolve) => setTimeout(resolve, 200));
             }
-          }));
+            results.push(result);
+            completed++;
+            setImportProgress(completed, files.length);
+            // Keep each article's progress visible long enough to follow.
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
 
           const articles = results.filter(Boolean);
           const failed = results.length - articles.length;
