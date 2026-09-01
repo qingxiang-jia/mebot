@@ -506,29 +506,67 @@
       min-height: 0;
     }
 
+    .summary-area.rendered-summary {
+      display: block;
+      overflow: auto;
+      scrollbar-gutter: stable;
+      font-size: 0.9rem;
+      line-height: 1.65;
+    }
+
+    .summary-area.rendered-summary h2,
+    .summary-area.rendered-summary h3,
+    .summary-area.rendered-summary h4 {
+      margin: 1em 0 0.5em;
+    }
+
+    .summary-area.rendered-summary h2:first-child {
+      margin-top: 0;
+    }
+
+    .summary-area.rendered-summary p {
+      margin-bottom: 0.75em;
+    }
+
+    .summary-area.rendered-summary ul,
+    .summary-area.rendered-summary ol {
+      margin: 0.5em 0 0.75em 1.5em;
+    }
+
+    .summary-area.rendered-summary blockquote {
+      border-left: 3px solid var(--border);
+      padding-left: 12px;
+      color: var(--text-muted);
+      margin: 0.75em 0;
+    }
+
     .summary-area label {
       margin-bottom: 8px;
       font-weight: 500;
       color: var(--text);
     }
 
+    .summary-area > h2 {
+      margin: 0 0 0.5em;
+      font-size: 1.5em;
+    }
+
     .summary-area textarea {
       flex: 1;
       min-height: 200px;
       resize: vertical;
-      background: var(--surface-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      background: transparent;
+      border: none;
+      border-radius: 0;
       color: var(--text);
-      padding: 12px;
+      padding: 0;
       font-family: var(--font);
       font-size: 0.9rem;
-      line-height: 1.55;
+      line-height: 1.65;
     }
 
     .summary-area textarea:focus {
       outline: none;
-      border-color: var(--accent);
     }
 
     .empty-state {
@@ -4266,6 +4304,7 @@
 
         if (!article) {
           area.innerHTML = '<div class="empty-state">Select an article to write a summary.</div>';
+          area.classList.remove("rendered-summary");
           modeButton.hidden = true;
           lastSummaryArticleId = null;
           return;
@@ -4282,9 +4321,10 @@
         const summary = article.summary || "";
 
         if (summaryMode === "raw") {
+          area.classList.remove("rendered-summary");
           area.innerHTML =
-            `<label for="summary-input">Summary for: ${escapeHtml(article.title)}</label>` +
-            `<textarea id="summary-input" placeholder="Write a summary for this article…">${escapeHtml(summary)}</textarea>`;
+            `<h2>${escapeHtml(article.title)}</h2>` +
+            `<textarea id="summary-input" aria-label="Summary for ${escapeHtml(article.title)}" placeholder="Write a summary for this article…">${escapeHtml(summary)}</textarea>`;
 
           const ta = $("summary-input");
           ta.addEventListener("input", () => {
@@ -4292,9 +4332,10 @@
             saveState();
           });
         } else {
+          area.classList.add("rendered-summary");
           area.innerHTML =
-            `<label id="summary-preview-label">Rendered summary for: ${escapeHtml(article.title)}</label>` +
-            `<div class="markdown-preview" aria-labelledby="summary-preview-label">${markdownToHtml(summary) || '<span style="color:var(--text-muted)">No summary yet.</span>'}</div>`;
+            `<h2>${escapeHtml(article.title)}</h2>` +
+            `${markdownToHtml(summary) || '<span style="color:var(--text-muted)">No summary yet.</span>'}`;
         }
       }
 
