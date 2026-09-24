@@ -415,8 +415,11 @@
       padding: 16px 20px;
       font-size: 0.9rem;
       line-height: 1.65;
+      text-align: justify;
+      text-justify: inter-word;
       -webkit-hyphens: auto;
       hyphens: auto;
+      text-wrap: pretty;
     }
 
     .article-content h2,
@@ -450,6 +453,7 @@
     .article-content pre,
     .summary-area pre,
     .summary-area code {
+      text-align: left;
       -webkit-hyphens: none;
       hyphens: none;
     }
@@ -515,8 +519,11 @@
       flex-direction: column;
       padding: 16px;
       min-height: 0;
+      text-align: justify;
+      text-justify: inter-word;
       -webkit-hyphens: auto;
       hyphens: auto;
+      text-wrap: pretty;
       font-family: var(--summary-font-family, var(--font));
       font-size: var(--summary-font-size, 14px);
     }
