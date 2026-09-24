@@ -415,6 +415,8 @@
       padding: 16px 20px;
       font-size: 0.9rem;
       line-height: 1.65;
+      -webkit-hyphens: auto;
+      hyphens: auto;
     }
 
     .article-content h2,
@@ -443,6 +445,13 @@
       padding-left: 12px;
       color: var(--text-muted);
       margin: 0.75em 0;
+    }
+
+    .article-content pre,
+    .summary-area pre,
+    .summary-area code {
+      -webkit-hyphens: none;
+      hyphens: none;
     }
 
     .markdown-preview {
@@ -496,6 +505,8 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       font-family: var(--mono);
+      -webkit-hyphens: auto;
+      hyphens: auto;
     }
 
     .summary-area {
@@ -504,13 +515,16 @@
       flex-direction: column;
       padding: 16px;
       min-height: 0;
+      -webkit-hyphens: auto;
+      hyphens: auto;
+      font-family: var(--summary-font-family, var(--font));
+      font-size: var(--summary-font-size, 14px);
     }
 
     .summary-area.rendered-summary {
       display: block;
       overflow: auto;
       scrollbar-gutter: stable;
-      font-size: 0.9rem;
       line-height: 1.65;
     }
 
@@ -560,9 +574,35 @@
       border-radius: 0;
       color: var(--text);
       padding: 0;
-      font-family: var(--font);
-      font-size: 0.9rem;
+      font: inherit;
       line-height: 1.65;
+    }
+
+    .summary-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+
+    .summary-header-actions label {
+      gap: 4px;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      white-space: nowrap;
+    }
+
+    .summary-header-actions select {
+      padding: 3px 6px;
+      font-size: 0.75rem;
+    }
+
+    .summary-header-actions .panel-header-action {
+      margin-left: 0;
+    }
+
+    .summary-header-actions[hidden] {
+      display: none;
     }
 
     .summary-area textarea:focus {
@@ -723,7 +763,26 @@
     <section class="panel">
       <div class="panel-header">
         <span>Summary</span>
-        <button id="btn-summary-mode" class="panel-header-action" type="button" hidden>Show rendered</button>
+        <div class="summary-header-actions" id="summary-header-actions" hidden>
+          <label for="summary-font-family">Font
+            <select id="summary-font-family" aria-label="Summary font">
+              <option value="default">Default</option>
+              <option value="sans-serif">Sans serif</option>
+              <option value="serif">Serif</option>
+              <option value="monospace">Monospace</option>
+            </select>
+          </label>
+          <label for="summary-font-size">Size
+            <select id="summary-font-size" aria-label="Summary font size">
+              <option value="12px">12</option>
+              <option value="14px">14</option>
+              <option value="16px">16</option>
+              <option value="18px">18</option>
+              <option value="20px">20</option>
+            </select>
+          </label>
+          <button id="btn-summary-mode" class="panel-header-action" type="button">Show rendered</button>
+        </div>
       </div>
       <div class="summary-area" id="summary-area">
         <div class="empty-state">Select an article to write a summary.</div>
@@ -3529,6 +3588,7 @@
 
       const STORAGE_KEY = "article-parser-data";
       const THEME_KEY = "article-parser-theme";
+      const SUMMARY_FONT_KEY = "article-parser-summary-font";
 
       /** @typedef {{ id: string, title: string, markdown: string, summary: string, sourceFile: string, parsedAt: number }} Article */
       /** @typedef {{ id: string, name: string, exportDate: string, articles: Article[], selectedArticleId: string|null, selectedArticleIds?: string[], createdAt: number }} Project */
@@ -3538,6 +3598,7 @@
       let state = { projects: {}, activeProjectId: null };
       let summaryMode = "raw";
       let lastSummaryArticleId = null;
+      let summaryFont = { family: "default", size: "14px" };
       const $ = (id) => document.getElementById(id);
 
       function uid() {
@@ -3563,6 +3624,34 @@
 
       function saveState() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }
+
+      function loadSummaryFont() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(SUMMARY_FONT_KEY) || "null");
+          if (saved?.family && saved?.size) summaryFont = { family: saved.family, size: saved.size };
+        } catch (e) {
+          console.warn("Failed to load summary font settings", e);
+        }
+      }
+
+      function applySummaryFont() {
+        const area = $("summary-area");
+        const families = {
+          default: "var(--font)",
+          "sans-serif": "Arial, Helvetica, sans-serif",
+          serif: "Georgia, Times New Roman, serif",
+          monospace: "var(--mono)",
+        };
+        area.style.setProperty("--summary-font-family", families[summaryFont.family] || families.default);
+        area.style.setProperty("--summary-font-size", summaryFont.size || "14px");
+        $("summary-font-family").value = summaryFont.family;
+        $("summary-font-size").value = summaryFont.size;
+      }
+
+      function saveSummaryFont() {
+        localStorage.setItem(SUMMARY_FONT_KEY, JSON.stringify(summaryFont));
+        applySummaryFont();
       }
 
       function activeProject() {
@@ -4301,10 +4390,12 @@
         const project = activeProject();
         const article = project?.articles.find((a) => a.id === project.selectedArticleId);
         const modeButton = $("btn-summary-mode");
+        const headerActions = $("summary-header-actions");
 
         if (!article) {
           area.innerHTML = '<div class="empty-state">Select an article to write a summary.</div>';
           area.classList.remove("rendered-summary");
+          headerActions.hidden = true;
           modeButton.hidden = true;
           lastSummaryArticleId = null;
           return;
@@ -4316,9 +4407,11 @@
         }
 
         modeButton.hidden = false;
+        headerActions.hidden = false;
         modeButton.textContent = summaryMode === "raw" ? "Show rendered" : "Show raw";
         modeButton.title = summaryMode === "raw" ? "Render the summary as Markdown" : "Show the summary as plain text";
         const summary = article.summary || "";
+        applySummaryFont();
 
         if (summaryMode === "raw") {
           area.classList.remove("rendered-summary");
@@ -4397,10 +4490,21 @@
           renderSummary();
         });
 
+        $("summary-font-family").addEventListener("change", (e) => {
+          summaryFont.family = e.target.value;
+          saveSummaryFont();
+        });
+
+        $("summary-font-size").addEventListener("change", (e) => {
+          summaryFont.size = e.target.value;
+          saveSummaryFont();
+        });
+
         $("btn-theme-toggle").addEventListener("click", toggleTheme);
       }
 
       applyTheme(localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light");
+      loadSummaryFont();
 
       loadState();
 
