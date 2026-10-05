@@ -428,6 +428,10 @@
       margin: 1em 0 0.5em;
     }
 
+    .article-content h2 {
+      text-align: left;
+    }
+
     .article-content p {
       margin-bottom: 0.75em;
     }
@@ -570,6 +574,7 @@
     .summary-area > h2 {
       margin: 0 0 0.5em;
       font-size: 1.5em;
+      text-align: left;
     }
 
     .summary-area textarea {
@@ -583,6 +588,17 @@
       padding: 0;
       font: inherit;
       line-height: 1.65;
+    }
+
+    .panel-header-leading {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .panel-header-leading .panel-header-action {
+      margin-left: 0;
     }
 
     .summary-header-actions {
@@ -689,6 +705,148 @@
       font-size: 0.85rem;
     }
 
+    .paste-summaries-dialog {
+      width: min(1280px, calc(100vw - 24px));
+      max-height: min(94vh, 1100px);
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      text-align: left;
+    }
+
+    .paste-summaries-dialog h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+
+    .paste-summaries-hint {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+
+    .paste-summaries-fallback {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .paste-summaries-fallback textarea {
+      width: 100%;
+      min-height: 200px;
+      height: 28vh;
+      resize: vertical;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+
+    .paste-summaries-body {
+      overflow: auto;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .paste-match-section h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .paste-match-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      margin-bottom: 8px;
+      background: var(--surface-2);
+    }
+
+    .paste-match-row.unmatched {
+      border-color: var(--danger);
+      background: var(--danger-bg);
+    }
+
+    .paste-match-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .paste-match-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 6px;
+    }
+
+    .paste-match-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .paste-match-preview {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+      max-height: 4.8em;
+      overflow: hidden;
+      white-space: pre-wrap;
+    }
+
+    .paste-match-row select {
+      width: 100%;
+    }
+
+    .paste-unmatched-articles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .paste-unmatched-articles span {
+      font-size: 0.8rem;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .paste-summaries-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 4px;
+    }
+
+    @media (max-width: 720px) {
+      .paste-match-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
     #file-input,
     #markdown-file-input {
       display: none;
@@ -769,7 +927,16 @@
 
     <section class="panel">
       <div class="panel-header">
-        <span>Summary</span>
+        <div class="panel-header-leading">
+          <span>Summary</span>
+          <button id="btn-paste-summaries" class="panel-header-action icon-action" type="button"
+            title="Paste Markdown summaries" aria-label="Paste Markdown summaries">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="7" y="4" width="12" height="16" rx="1.5"></rect>
+              <path d="M9 4.5h8v2.5H9zM5 8v12h10"></path>
+            </svg>
+          </button>
+        </div>
         <div class="summary-header-actions" id="summary-header-actions" hidden>
           <label for="summary-font-family">Font
             <select id="summary-font-family" aria-label="Summary font">
@@ -796,6 +963,28 @@
       </div>
     </section>
   </main>
+
+  <div id="paste-summaries-overlay" class="import-overlay" hidden role="dialog" aria-modal="true"
+    aria-labelledby="paste-summaries-title">
+    <div class="paste-summaries-dialog">
+      <h2 id="paste-summaries-title">Match pasted summaries</h2>
+      <p class="paste-summaries-hint">
+        Paste Markdown summaries below. Article titles are the headings with the fewest
+        <code>#</code> marks (so <code>## Title</code> and <code>### Title</code> both work).
+        Matches use title edit distance. Confirm them, then assign any unmatched summaries to the matching full text.
+      </p>
+      <div class="paste-summaries-fallback" id="paste-summaries-fallback">
+        <label for="paste-summaries-manual">Paste Markdown summaries</label>
+        <textarea id="paste-summaries-manual" placeholder="## Article title&#10;&#10;Summary text…&#10;&#10;### Or a deeper title&#10;&#10;Summary text…"></textarea>
+        <button type="button" id="btn-parse-pasted-summaries">Parse pasted Markdown</button>
+      </div>
+      <div class="paste-summaries-body" id="paste-summaries-body"></div>
+      <div class="paste-summaries-actions">
+        <button type="button" id="btn-paste-summaries-cancel">Cancel</button>
+        <button type="button" class="primary" id="btn-paste-summaries-apply">Apply summaries</button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast" id="toast"></div>
 
@@ -3606,6 +3795,8 @@
       let summaryMode = "raw";
       let lastSummaryArticleId = null;
       let summaryFont = { family: "default", size: "14px" };
+      /** @type {{ summaries: { title: string, body: string }[], assignments: Record<number, string>, articles: Article[] } | null} */
+      let pasteMatchState = null;
       const $ = (id) => document.getElementById(id);
 
       function uid() {
@@ -4065,42 +4256,161 @@
         }
       }
 
+      function markdownSectionList(sectionText) {
+        const lines = String(sectionText || "").split(/\r?\n/);
+        const sections = [];
+        let current = null;
+        for (const line of lines) {
+          const heading = line.match(/^##(?!#)\s+(.+?)\s*$/);
+          if (heading) {
+            if (current) current.body = current.body.join("\n").trim();
+            current = { title: heading[1].trim(), body: [] };
+            sections.push(current);
+          } else if (current) {
+            current.body.push(line);
+          }
+        }
+        if (current) current.body = current.body.join("\n").trim();
+        return sections;
+      }
+
+      function normalizeSummaryBody(body) {
+        const text = String(body || "").trim();
+        return text === "_No summary._" ? "" : text;
+      }
+
       function parseExportedMarkdown(text) {
         const fullTextStart = text.search(/^# Full Text\s*$/m);
         const summaryStart = text.search(/^# Summary\s*$/m);
         if (fullTextStart === -1 || summaryStart === -1 || summaryStart <= fullTextStart) return [];
 
-        const sectionList = (sectionText) => {
-          const lines = sectionText.split(/\r?\n/);
-          const sections = [];
-          let current = null;
-          for (const line of lines) {
-            const heading = line.match(/^##(?!#)\s+(.+?)\s*$/);
-            if (heading) {
-              if (current) current.body = current.body.join("\n").trim();
-              current = { title: heading[1].trim(), body: [] };
-              sections.push(current);
-            } else if (current) {
-              current.body.push(line);
-            }
-          }
-          if (current) current.body = current.body.join("\n").trim();
-          return sections;
-        };
-
         const fullText = text.slice(fullTextStart, summaryStart).replace(/^# Full Text\s*\r?\n/m, "");
         const summaries = text.slice(summaryStart).replace(/^# Summary\s*\r?\n/m, "");
-        const summaryByTitle = new Map(sectionList(summaries).map((section) => [section.title, section.body]));
-        const articles = sectionList(fullText);
+        const summaryByTitle = new Map(markdownSectionList(summaries).map((section) => [section.title, section.body]));
+        const articles = markdownSectionList(fullText);
 
         return articles.map((article) => ({
           id: uid(),
           title: article.title,
           markdown: `## ${article.title}\n\n${article.body}`.trim(),
-          summary: summaryByTitle.get(article.title) === "_No summary._" ? "" : (summaryByTitle.get(article.title) || ""),
+          summary: normalizeSummaryBody(summaryByTitle.get(article.title) || ""),
           sourceFile: "imported Markdown",
           parsedAt: Date.now(),
         }));
+      }
+
+      function headingTitle(raw) {
+        return String(raw || "").replace(/\s+#+\s*$/, "").trim();
+      }
+
+      function isWrapperHeading(title) {
+        return /^(summary|summaries|full text)$/i.test(String(title || "").trim());
+      }
+
+      function parsePastedSummaries(text) {
+        const source = String(text || "").trim();
+        if (!source) return [];
+        const summaryStart = source.search(/^#{1,6}\s+Summar(y|ies)\s*$/im);
+        const summaryText = summaryStart === -1
+          ? source
+          : source.slice(summaryStart).replace(/^#{1,6}\s+Summar(y|ies)\s*\r?\n/im, "");
+        const lines = summaryText.split(/\r?\n/);
+        const headingRe = /^(#{1,6})\s+(.+?)\s*$/;
+        let articleLevel = Infinity;
+        for (const line of lines) {
+          const match = line.match(headingRe);
+          if (!match) continue;
+          const title = headingTitle(match[2]);
+          if (!title || isWrapperHeading(title)) continue;
+          articleLevel = Math.min(articleLevel, match[1].length);
+        }
+        if (!Number.isFinite(articleLevel)) return [];
+
+        const sections = [];
+        let current = null;
+        for (const line of lines) {
+          const match = line.match(headingRe);
+          const title = match ? headingTitle(match[2]) : "";
+          const isArticleTitle = Boolean(
+            match && match[1].length === articleLevel && title && !isWrapperHeading(title)
+          );
+          if (isArticleTitle) {
+            if (current) current.body = current.body.join("\n").trim();
+            current = { title, body: [] };
+            sections.push(current);
+          } else if (current) {
+            current.body.push(line);
+          }
+        }
+        if (current) current.body = current.body.join("\n").trim();
+        return sections
+          .filter((section) => section.title)
+          .map((section) => ({
+            title: section.title,
+            body: normalizeSummaryBody(section.body),
+          }));
+      }
+
+      function normalizeMatchTitle(title) {
+        return String(title || "").toLowerCase().replace(/\s+/g, " ").trim();
+      }
+
+      function levenshtein(a, b) {
+        const left = String(a);
+        const right = String(b);
+        const m = left.length;
+        const n = right.length;
+        if (!m) return n;
+        if (!n) return m;
+        const row = new Array(n + 1);
+        for (let j = 0; j <= n; j++) row[j] = j;
+        for (let i = 1; i <= m; i++) {
+          let prev = row[0];
+          row[0] = i;
+          for (let j = 1; j <= n; j++) {
+            const temp = row[j];
+            const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+            row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost);
+            prev = temp;
+          }
+        }
+        return row[n];
+      }
+
+      function titleEditDistance(a, b) {
+        return levenshtein(normalizeMatchTitle(a), normalizeMatchTitle(b));
+      }
+
+      function autoMatchSummaries(summaries, articles) {
+        const pairs = [];
+        for (let i = 0; i < summaries.length; i++) {
+          for (const article of articles) {
+            const left = normalizeMatchTitle(summaries[i].title);
+            const right = normalizeMatchTitle(article.title);
+            const dist = levenshtein(left, right);
+            const maxLen = Math.max(left.length, right.length, 1);
+            pairs.push({
+              summaryIndex: i,
+              articleId: article.id,
+              dist,
+              ratio: dist / maxLen,
+            });
+          }
+        }
+        pairs.sort((a, b) => a.dist - b.dist || a.ratio - b.ratio);
+        const usedSummaries = new Set();
+        const usedArticles = new Set();
+        const assignments = {};
+        const MATCH_RATIO = 0.35;
+        for (const pair of pairs) {
+          if (usedSummaries.has(pair.summaryIndex) || usedArticles.has(pair.articleId)) continue;
+          if (pair.dist === 0 || pair.ratio <= MATCH_RATIO) {
+            usedSummaries.add(pair.summaryIndex);
+            usedArticles.add(pair.articleId);
+            assignments[pair.summaryIndex] = pair.articleId;
+          }
+        }
+        return assignments;
       }
 
       async function importMarkdownFile(file) {
@@ -4161,6 +4471,174 @@
           document.execCommand("copy");
           textarea.remove();
         }
+      }
+
+      function previewSnippet(text, limit = 240) {
+        const snippet = String(text || "").replace(/\s+/g, " ").trim();
+        if (!snippet) return "No text.";
+        return snippet.length > limit ? `${snippet.slice(0, limit)}…` : snippet;
+      }
+
+      function articleBodyPreview(article) {
+        return previewSnippet(String(article.markdown || "").replace(/^## .+\n+/m, ""));
+      }
+
+      function assignedArticleIds() {
+        return new Set(Object.values(pasteMatchState?.assignments || {}).filter(Boolean));
+      }
+
+      function closePasteSummariesDialog() {
+        pasteMatchState = null;
+        $("paste-summaries-overlay").hidden = true;
+        $("paste-summaries-manual").value = "";
+        $("paste-summaries-body").innerHTML = "";
+      }
+
+      function openPasteSummariesDialog() {
+        $("paste-summaries-overlay").hidden = false;
+        renderPasteMatchDialog();
+        $("paste-summaries-manual").focus();
+      }
+
+      function loadSummariesIntoDialog(summaries) {
+        const project = activeProject();
+        if (!project?.articles.length) {
+          showToast("Add articles before pasting summaries", true);
+          return false;
+        }
+        if (!summaries.length) {
+          pasteMatchState = null;
+          renderPasteMatchDialog();
+          return false;
+        }
+        pasteMatchState = {
+          summaries,
+          articles: project.articles,
+          assignments: autoMatchSummaries(summaries, project.articles),
+        };
+        renderPasteMatchDialog();
+        return true;
+      }
+
+      function renderPasteMatchDialog() {
+        const body = $("paste-summaries-body");
+        if (!pasteMatchState) {
+          body.innerHTML = '<div class="empty-state" style="padding:16px">Paste Markdown summaries to match them with articles.</div>';
+          $("btn-paste-summaries-apply").disabled = true;
+          return;
+        }
+
+        const { summaries, articles, assignments } = pasteMatchState;
+        const usedIds = assignedArticleIds();
+        const matched = [];
+        const unmatchedSummaries = [];
+        summaries.forEach((summary, index) => {
+          if (assignments[index]) matched.push(index);
+          else unmatchedSummaries.push(index);
+        });
+        const unmatchedArticles = articles.filter((article) => !usedIds.has(article.id));
+
+        const rowHtml = (summaryIndex) => {
+          const summary = summaries[summaryIndex];
+          const articleId = assignments[summaryIndex] || "";
+          const article = articles.find((item) => item.id === articleId);
+          const matchedRow = Boolean(article);
+          const dist = article ? titleEditDistance(summary.title, article.title) : null;
+          const articleOptions = ['<option value="">— Not matched —</option>'];
+          for (const item of articles) {
+            if (usedIds.has(item.id) && item.id !== articleId) continue;
+            const itemDist = titleEditDistance(summary.title, item.title);
+            articleOptions.push(
+              `<option value="${escapeHtml(item.id)}"${item.id === articleId ? " selected" : ""}>${escapeHtml(item.title)} (${itemDist})</option>`
+            );
+          }
+          return (
+            `<div class="paste-match-row${matchedRow ? "" : " unmatched"}">` +
+              `<div>` +
+                `<div class="paste-match-label">Pasted summary</div>` +
+                `<div class="paste-match-title">${escapeHtml(summary.title)}</div>` +
+                `<div class="paste-match-preview">${escapeHtml(previewSnippet(summary.body) || "Empty summary.")}</div>` +
+              `</div>` +
+              `<div>` +
+                `<div class="paste-match-label">Article full text</div>` +
+                `<select data-summary-index="${summaryIndex}" aria-label="Match ${escapeHtml(summary.title)} to an article">${articleOptions.join("")}</select>` +
+                (article
+                  ? `<div class="paste-match-meta">Edit distance ${dist}${dist === 0 ? " · exact title match" : ""}</div>` +
+                    `<div class="paste-match-title">${escapeHtml(article.title)}</div>` +
+                    `<div class="paste-match-preview">${escapeHtml(articleBodyPreview(article))}</div>`
+                  : `<div class="paste-match-meta">No article selected. Choose the matching full text.</div>`) +
+              `</div>` +
+            `</div>`
+          );
+        };
+
+        body.innerHTML =
+          `<div class="paste-match-section">` +
+            `<h3>Matched (${matched.length})</h3>` +
+            (matched.length ? matched.map(rowHtml).join("") : '<p class="paste-summaries-hint">No automatic title matches.</p>') +
+          `</div>` +
+          `<div class="paste-match-section">` +
+            `<h3>Unmatched summaries (${unmatchedSummaries.length})</h3>` +
+            (unmatchedSummaries.length ? unmatchedSummaries.map(rowHtml).join("") : '<p class="paste-summaries-hint">Every pasted summary is matched.</p>') +
+          `</div>` +
+          `<div class="paste-match-section">` +
+            `<h3>Unmatched articles (${unmatchedArticles.length})</h3>` +
+            (unmatchedArticles.length
+              ? `<div class="paste-unmatched-articles">${unmatchedArticles.map((article) => `<span>${escapeHtml(article.title)}</span>`).join("")}</div>`
+              : '<p class="paste-summaries-hint">Every article has a summary assigned.</p>') +
+          `</div>`;
+
+        body.querySelectorAll("select[data-summary-index]").forEach((select) => {
+          select.addEventListener("change", () => {
+            const index = Number(select.getAttribute("data-summary-index"));
+            const nextId = select.value;
+            if (nextId) {
+              for (const [key, value] of Object.entries(pasteMatchState.assignments)) {
+                if (value === nextId && Number(key) !== index) delete pasteMatchState.assignments[key];
+              }
+              pasteMatchState.assignments[index] = nextId;
+            } else {
+              delete pasteMatchState.assignments[index];
+            }
+            renderPasteMatchDialog();
+          });
+        });
+
+        $("btn-paste-summaries-apply").disabled = !Object.values(assignments).some(Boolean);
+      }
+
+      function openPasteSummariesFromButton() {
+        const project = activeProject();
+        if (!project?.articles.length) {
+          showToast("Add articles before pasting summaries", true);
+          return;
+        }
+        pasteMatchState = null;
+        openPasteSummariesDialog();
+      }
+
+      function parseManualPastedSummaries({ quiet = false } = {}) {
+        const summaries = parsePastedSummaries($("paste-summaries-manual").value);
+        if (loadSummariesIntoDialog(summaries)) return;
+        if (!quiet && !summaries.length) showToast("No Markdown summaries found", true);
+      }
+
+      function applyPastedSummaries() {
+        const project = activeProject();
+        if (!project || !pasteMatchState) return;
+        const byId = new Map(project.articles.map((article) => [article.id, article]));
+        let applied = 0;
+        for (const [index, articleId] of Object.entries(pasteMatchState.assignments)) {
+          const article = byId.get(articleId);
+          const summary = pasteMatchState.summaries[Number(index)];
+          if (!article || !summary) continue;
+          article.summary = summary.body;
+          applied++;
+        }
+        saveState();
+        closePasteSummariesDialog();
+        render();
+        showToast(applied ? `Applied ${applied} summary(ies)` : "No summaries applied", !applied);
       }
 
       async function copyArticleTitles() {
@@ -4489,6 +4967,21 @@
         $("btn-copy-titles").addEventListener("click", copyArticleTitles);
 
         $("btn-copy-articles").addEventListener("click", copyArticles);
+
+        $("btn-paste-summaries").addEventListener("click", openPasteSummariesFromButton);
+        $("btn-paste-summaries-cancel").addEventListener("click", closePasteSummariesDialog);
+        $("btn-paste-summaries-apply").addEventListener("click", applyPastedSummaries);
+        $("btn-parse-pasted-summaries").addEventListener("click", () => parseManualPastedSummaries());
+        $("paste-summaries-manual").addEventListener("input", () => parseManualPastedSummaries({ quiet: true }));
+        $("paste-summaries-manual").addEventListener("paste", () => {
+          setTimeout(() => parseManualPastedSummaries({ quiet: true }), 0);
+        });
+        $("paste-summaries-overlay").addEventListener("click", (e) => {
+          if (e.target === $("paste-summaries-overlay")) closePasteSummariesDialog();
+        });
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && !$("paste-summaries-overlay").hidden) closePasteSummariesDialog();
+        });
 
         $("btn-delete-article").addEventListener("click", removeArticle);
 
