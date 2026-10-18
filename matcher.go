@@ -8,13 +8,27 @@ import (
 type ParsedSummaryBlock struct {
 	RawTitle       string
 	Body           string
-	SelectedOption string // Title of the assigned article or "[Do Not Match]"
+	SelectedOption string // Title of assigned article or "[Do Not Match]"
 }
 
 const OptionDoNotMatch = "[Do Not Match]"
 
-// ParsePastedSummaries splits markdown text by headings (#, ##, ###) into title + summary blocks
+// IsSummaryEmpty checks if a summary is empty, whitespace, or invalid header artifacts
+func IsSummaryEmpty(s string) bool {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "\u00a0\u200b\ufeff\r\n\t ")
+	// If it only contains an accidental dangling header like "## Article Title", treat as empty
+	if strings.HasPrefix(s, "## ") && !strings.Contains(s, "\n") {
+		return true
+	}
+	return s == ""
+}
+
+// ParsePastedSummaries splits markdown text by headings into title + summary blocks
 func ParsePastedSummaries(raw string) []ParsedSummaryBlock {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+
 	lines := strings.Split(raw, "\n")
 	var blocks []ParsedSummaryBlock
 	var currentTitle string
@@ -23,10 +37,14 @@ func ParsePastedSummaries(raw string) []ParsedSummaryBlock {
 	flush := func() {
 		body := strings.TrimSpace(strings.Join(currentBody, "\n"))
 		title := strings.TrimSpace(currentTitle)
-		// Clean leading markdown formatting like **Title** or *Title*
 		title = strings.Trim(title, "*_`# ")
+
+		if idx := strings.Index(title, ". "); idx > 0 && idx < 4 {
+			title = strings.TrimSpace(title[idx+2:])
+		}
+		title = strings.Trim(title, "*_`# ")
+
 		if title != "" && body != "" {
-			// Skip standalone top-level section headers like "# Summary"
 			if !strings.EqualFold(title, "summary") && !strings.EqualFold(title, "summaries") {
 				blocks = append(blocks, ParsedSummaryBlock{
 					RawTitle:       title,
@@ -40,19 +58,53 @@ func ParsePastedSummaries(raw string) []ParsedSummaryBlock {
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		isHeading := false
+		var headingText string
+
 		if strings.HasPrefix(trimmed, "#") {
+			isHeading = true
+			headingText = strings.TrimLeft(trimmed, "# ")
+		} else if strings.HasPrefix(trimmed, "**") && strings.HasSuffix(trimmed, "**") && len(trimmed) > 4 {
+			isHeading = true
+			headingText = strings.Trim(trimmed, "* ")
+		} else if strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "===") {
+			continue
+		}
+
+		if isHeading {
 			flush()
-			currentTitle = strings.TrimLeft(trimmed, "# ")
+			currentTitle = headingText
 		} else {
 			currentBody = append(currentBody, line)
 		}
 	}
 	flush()
 
+	// Fallback for single-summary pastes without headings
+	if len(blocks) == 0 && strings.TrimSpace(raw) != "" {
+		var firstLine string
+		var rest []string
+		for _, l := range lines {
+			if firstLine == "" && strings.TrimSpace(l) != "" {
+				firstLine = strings.Trim(strings.TrimSpace(l), "*_`# ")
+			} else if firstLine != "" {
+				rest = append(rest, l)
+			}
+		}
+		body := strings.TrimSpace(strings.Join(rest, "\n"))
+		if body == "" {
+			body = firstLine
+		}
+		blocks = append(blocks, ParsedSummaryBlock{
+			RawTitle:       firstLine,
+			Body:           body,
+			SelectedOption: OptionDoNotMatch,
+		})
+	}
+
 	return blocks
 }
 
-// Levenshtein edit distance algorithm
 func levenshtein(a, b string) int {
 	ra := []rune(a)
 	rb := []rune(b)
@@ -90,7 +142,6 @@ func levenshtein(a, b string) int {
 	return d[la][lb]
 }
 
-// Normalized alphanumeric string for robust comparison
 func normalizeTitle(s string) string {
 	s = strings.ToLower(s)
 	var b strings.Builder
@@ -102,7 +153,6 @@ func normalizeTitle(s string) string {
 	return b.String()
 }
 
-// TitleSimilarity returns a score between 0.0 (completely different) and 1.0 (exact match)
 func TitleSimilarity(s1, s2 string) float64 {
 	n1 := normalizeTitle(s1)
 	n2 := normalizeTitle(s2)
@@ -122,32 +172,30 @@ func TitleSimilarity(s1, s2 string) float64 {
 	return 1.0 - (float64(dist) / float64(maxLen))
 }
 
-// MatchSummariesToUnmatched matches parsed summaries to articles that do NOT have a summary yet
-func MatchSummariesToUnmatched(summaries []ParsedSummaryBlock, articles []*Article) ([]ParsedSummaryBlock, []string) {
-	// 1. Gather candidate articles that have no summary
-	var unmatched []*Article
+// MatchSummariesToArticles matches against empty summaries, or all articles if includeExisting is true
+func MatchSummariesToArticles(summaries []ParsedSummaryBlock, articles []*Article, includeExisting bool) ([]ParsedSummaryBlock, []string) {
+	var candidates []*Article
 	var optionTitles []string
 	optionTitles = append(optionTitles, OptionDoNotMatch)
 
 	for _, art := range articles {
-		if strings.TrimSpace(art.Summary) == "" {
-			unmatched = append(unmatched, art)
+		if includeExisting || IsSummaryEmpty(art.Summary) {
+			candidates = append(candidates, art)
 			optionTitles = append(optionTitles, art.Title)
 		}
 	}
 
-	if len(unmatched) == 0 {
+	if len(candidates) == 0 {
 		return summaries, optionTitles
 	}
 
 	used := make(map[string]bool)
 
-	// 2. Perform fuzzy matching using edit distance
 	for i := range summaries {
 		bestScore := 0.0
 		bestTitle := OptionDoNotMatch
 
-		for _, art := range unmatched {
+		for _, art := range candidates {
 			if used[art.Title] {
 				continue
 			}
@@ -158,8 +206,7 @@ func MatchSummariesToUnmatched(summaries []ParsedSummaryBlock, articles []*Artic
 			}
 		}
 
-		// Minimum similarity threshold (tolerates typos, punctuation, capitalization)
-		if bestScore >= 0.45 && bestTitle != OptionDoNotMatch {
+		if bestScore >= 0.35 && bestTitle != OptionDoNotMatch {
 			summaries[i].SelectedOption = bestTitle
 			used[bestTitle] = true
 		} else {

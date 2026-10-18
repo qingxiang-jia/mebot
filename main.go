@@ -65,6 +65,8 @@ type App struct {
 	// Batch Summary Matching State
 	ShowBatchSummaryModal bool
 	BatchPastedMarkdown   string
+	BatchMatchError       string // Stores error message displayed in modal
+	BatchIncludeExisting  bool   // Checkbox state to allow replacing existing summaries
 	ParsedSummaryMatches  []ParsedSummaryBlock
 	UnmatchedOptions      []string
 	BatchMatchingStep     int // 0 = Paste input, 1 = Review matches
@@ -1028,18 +1030,55 @@ func (a *App) renderDeleteArticleModal(c *ui.Context) {
 
 func (a *App) OpenBatchSummaryModal() {
 	a.BatchPastedMarkdown = ""
+	a.BatchMatchError = ""
 	a.ParsedSummaryMatches = nil
 	a.UnmatchedOptions = nil
 	a.BatchMatchingStep = 0
+
+	// Check how many articles have empty summaries
+	emptyCount := 0
+	for _, art := range a.Articles {
+		if IsSummaryEmpty(art.Summary) {
+			emptyCount++
+		}
+	}
+	// If all articles have summaries, default to including existing so you're not blocked
+	a.BatchIncludeExisting = (emptyCount == 0)
 	a.ShowBatchSummaryModal = true
 }
 
 func (a *App) AnalyzeBatchMarkdown() {
-	blocks := ParsePastedSummaries(a.BatchPastedMarkdown)
-	if len(blocks) == 0 {
+	a.BatchMatchError = ""
+
+	if strings.TrimSpace(a.BatchPastedMarkdown) == "" {
+		a.BatchMatchError = "Please paste some markdown summary text first."
 		return
 	}
-	matched, options := MatchSummariesToUnmatched(blocks, a.Articles)
+
+	if len(a.Articles) == 0 {
+		a.BatchMatchError = "The active project has no articles to match against."
+		return
+	}
+
+	emptyCount := 0
+	for _, art := range a.Articles {
+		if IsSummaryEmpty(art.Summary) {
+			emptyCount++
+		}
+	}
+
+	// Never block: if there are no empty ones, automatically enable includeExisting
+	if emptyCount == 0 {
+		a.BatchIncludeExisting = true
+	}
+
+	blocks := ParsePastedSummaries(a.BatchPastedMarkdown)
+	if len(blocks) == 0 {
+		a.BatchMatchError = "Could not parse any summaries from the text. Make sure sections have titles."
+		return
+	}
+
+	matched, options := MatchSummariesToArticles(blocks, a.Articles, a.BatchIncludeExisting)
 	a.ParsedSummaryMatches = matched
 	a.UnmatchedOptions = options
 	a.BatchMatchingStep = 1
@@ -1084,6 +1123,7 @@ func (a *App) renderBatchSummaryModal(c *ui.Context) {
 			Justify(ui.Start).
 			AlignItems(ui.Stretch).
 			Children(func() {
+				// Header
 				ui.Row(c).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
 					ui.Spacer(c)
@@ -1094,13 +1134,34 @@ func (a *App) renderBatchSummaryModal(c *ui.Context) {
 					}
 				})
 
-				if a.BatchMatchingStep == 0 {
-					ui.Text(c, "Paste your markdown summaries below (separated by # or ## headings). Articles that already have summaries will be skipped.").
-						FontSize(12).TextColor(a.Theme.TextMuted)
+				emptyCount := 0
+				for _, art := range a.Articles {
+					if IsSummaryEmpty(art.Summary) {
+						emptyCount++
+					}
+				}
 
-					ui.TextInput(c, &a.BatchPastedMarkdown).
+				if a.BatchMatchingStep == 0 {
+					// Step 1: Input & Options
+					ui.Row(c).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "Paste your markdown summaries below:").FontSize(12).TextColor(a.Theme.TextMuted)
+						ui.Spacer(c)
+						ui.Text(c, fmt.Sprintf("Project has %d articles (%d without summary)", len(a.Articles), emptyCount)).
+							FontSize(11).TextColor(a.Theme.Accent)
+					})
+
+					ui.TextArea(c, &a.BatchPastedMarkdown).
 						Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
 						Grow(1)
+
+					// Allow toggling whether to include/replace articles that already have summaries
+					ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+						ui.Checkbox(c, &a.BatchIncludeExisting, "Include articles that already have summaries")
+					})
+
+					if a.BatchMatchError != "" {
+						ui.Text(c, a.BatchMatchError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
+					}
 
 					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
 						if ui.Button(c, "Cancel").Clicked() {
@@ -1111,6 +1172,7 @@ func (a *App) renderBatchSummaryModal(c *ui.Context) {
 						}
 					})
 				} else {
+					// Step 2: Review & Assign
 					ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
 						FontSize(12).TextColor(a.Theme.TextMuted)
 
