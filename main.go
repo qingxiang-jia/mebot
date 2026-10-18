@@ -690,20 +690,22 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// Font & Size pickers
+		// Font selection using ui.Combobox (scrollable & searchable)
 		ui.Text(c, "Font:").FontSize(11).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
 			prevFont := a.SelectedFont
-			ui.Select(c, &a.SelectedFont, a.AvailableFonts)
+			// .Width(160) keeps the toolbar compact and prevents layout shifting
+			ui.Combobox(c, &a.SelectedFont, a.AvailableFonts).Width(160)
 			if a.SelectedFont != prevFont {
 				a.Settings.FontFamily = a.SelectedFont
 				_ = a.Settings.Save()
 			}
 		}
 
+		// Font size selector
 		ui.Text(c, "Size:").FontSize(11).TextColor(a.Theme.TextMuted)
 		prevSize := a.SelectedFontSize
-		ui.Select(c, &a.SelectedFontSize, a.FontSizeOptions)
+		ui.Select(c, &a.SelectedFontSize, a.FontSizeOptions).Width(60)
 		if a.SelectedFontSize != prevSize {
 			a.Settings.FontSize = a.SelectedFontSize
 			_ = a.Settings.Save()
