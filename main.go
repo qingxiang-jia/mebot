@@ -628,7 +628,6 @@ func (a *App) View(c *ui.Context) {
 
 func (a *App) renderToolbar(c *ui.Context) {
 	ui.Toolbar(c, func() {
-		// Project Switcher
 		if len(a.Projects) > 1 {
 			prevIdx := a.ActiveProjectIdx
 			ui.Segmented(c, &a.ActiveProjectIdx, a.Projects...).Label("Projects")
@@ -639,26 +638,38 @@ func (a *App) renderToolbar(c *ui.Context) {
 			ui.Button(c, a.Projects[0])
 		}
 
-		if ui.Button(c, "➕").Tooltip("New Project").Clicked() {
+		// New Project
+		if ui.Button(c, "").Tooltip("New Project").Children(func() {
+			ui.Icon(c, IconAdd).Size(14, 14)
+		}).Clicked() {
 			a.ShowNewProjectModal = true
 		}
 
+		// Delete Project
 		if len(a.Projects) > 0 {
-			if ui.Button(c, "🗑️").Tooltip("Delete Current Project").Clicked() {
+			if ui.Button(c, "").Tooltip("Delete Current Project").Children(func() {
+				ui.Icon(c, IconTrash).Size(14, 14)
+			}).Clicked() {
 				a.ShowDeleteProjectConfirm = true
 			}
 		}
 
 		ui.Divider(c)
 
-		// File Actions with Tooltips
-		if ui.Button(c, "📥").Tooltip("Import HTML Article(s)").Clicked() {
+		// File Actions
+		if ui.Button(c, "").Tooltip("Import HTML Article(s)").Children(func() {
+			ui.Icon(c, IconImport).Size(14, 14)
+		}).Clicked() {
 			a.ImportHTMLFiles()
 		}
-		if ui.Button(c, "📑").Tooltip("Import Markdown Rollup").Clicked() {
+		if ui.Button(c, "").Tooltip("Import Markdown Rollup").Children(func() {
+			ui.Icon(c, IconDocument).Size(14, 14)
+		}).Clicked() {
 			a.ImportMarkdownFile()
 		}
-		if ui.PrimaryButton(c, "📤").Tooltip("Export to Documents").Clicked() {
+		if ui.PrimaryButton(c, "").Tooltip("Export to Documents").Children(func() {
+			ui.Icon(c, IconExport).Size(14, 14)
+		}).Clicked() {
 			a.ShowExportModal = true
 		}
 
@@ -673,7 +684,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// Font selection and size selection
+		// Font & Size pickers
 		ui.Text(c, "Font:").FontSize(11).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
 			prevFont := a.SelectedFont
@@ -694,14 +705,16 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// Theme Toggle
-		themeIcon := "🌙"
-		themeTip := "Switch to Dark Mode"
-		if a.IsDarkMode {
-			themeIcon = "☀️"
-			themeTip = "Switch to Light Mode"
+		// Theme Toggle (Sun / Moon)
+		themeIcon := IconSun
+		themeTip := "Switch to Light Mode"
+		if !a.IsDarkMode {
+			themeIcon = IconMoon
+			themeTip = "Switch to Dark Mode"
 		}
-		if ui.Button(c, themeIcon).Tooltip(themeTip).Clicked() {
+		if ui.Button(c, "").Tooltip(themeTip).Children(func() {
+			ui.Icon(c, themeIcon).Size(14, 14)
+		}).Clicked() {
 			a.ToggleTheme()
 		}
 	}).Background(a.Theme.ToolbarBg).Label("Mebot Toolbar")
@@ -710,29 +723,46 @@ func (a *App) renderToolbar(c *ui.Context) {
 // Column 1: macOS Style Sidebar with Action Buttons at the Top
 func (a *App) renderArticleListColumn(c *ui.Context) {
 	ui.Column(c).Fill().Padding(8).Gap(8).Background(a.Theme.SidebarBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		// macOS Icon Action Bar at top of Sidebar
 		ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
-			if ui.Button(c, "🗑️").Tooltip("Delete Selected Article(s)").Clicked() {
+			// Delete Selected
+			if ui.Button(c, "").Tooltip("Delete Selected Article(s)").Children(func() {
+				ui.Icon(c, IconTrash).Size(14, 14)
+			}).Clicked() {
 				if a.ChosenArticles.Len() > 0 || a.CurrentArticle() != nil {
 					a.ShowDeleteArticleConfirm = true
 				}
 			}
-			if ui.Button(c, "📋").Tooltip("Copy Selected Titles").Clicked() {
+
+			// Copy Titles
+			if ui.Button(c, "").Tooltip("Copy Selected Titles").Children(func() {
+				ui.Icon(c, IconCopy).Size(14, 14)
+			}).Clicked() {
 				a.CopySelectedTitles()
 			}
-			if ui.Button(c, "📄").Tooltip("Copy Selected Content").Clicked() {
+
+			// Copy Content
+			if ui.Button(c, "").Tooltip("Copy Selected Content").Children(func() {
+				ui.Icon(c, IconPaste).Size(14, 14)
+			}).Clicked() {
 				a.CopySelectedContents()
 			}
 
 			ui.Spacer(c)
 
-			if ui.Button(c, "☑️").Tooltip("Select All").Clicked() {
+			// Select All
+			if ui.Button(c, "").Tooltip("Select All").Children(func() {
+				ui.Icon(c, IconSelectAll).Size(14, 14)
+			}).Clicked() {
 				for i := 0; i < len(a.Articles); i++ {
 					a.ChosenArticles.Add(i)
 				}
 				a.SaveProjectSelection()
 			}
-			if ui.Button(c, "⬜").Tooltip("Clear Selection").Clicked() {
+
+			// Clear Selection
+			if ui.Button(c, "").Tooltip("Clear Selection").Children(func() {
+				ui.Icon(c, IconSelectNone).Size(14, 14)
+			}).Clicked() {
 				a.ChosenArticles.Clear()
 				a.SaveProjectSelection()
 			}
