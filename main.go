@@ -68,6 +68,9 @@ type App struct {
 	ParsedSummaryMatches  []ParsedSummaryBlock
 	UnmatchedOptions      []string
 	BatchMatchingStep     int // 0 = Paste input, 1 = Review matches
+
+	ShowRenameProjectModal bool
+	RenameProjectName      string
 }
 
 func NewApp() *App {
@@ -636,6 +639,7 @@ func (a *App) View(c *ui.Context) {
 		a.renderDeleteProjectModal(c)
 		a.renderDeleteArticleModal(c)
 		a.renderNewProjectModal(c)
+		a.renderRenameProjectModal(c)
 		a.renderBatchSummaryModal(c)
 	})
 }
@@ -659,8 +663,16 @@ func (a *App) renderToolbar(c *ui.Context) {
 			a.ShowNewProjectModal = true
 		}
 
-		// Delete Project
 		if len(a.Projects) > 0 {
+			// Rename Active Project
+			if ui.Button(c, "").Tooltip("Rename Current Project").Children(func() {
+				ui.Icon(c, IconEdit).Size(14, 14)
+			}).Clicked() {
+				a.RenameProjectName = a.ActiveProject
+				a.ShowRenameProjectModal = true
+			}
+
+			// Delete Active Project
 			if ui.Button(c, "").Tooltip("Delete Current Project").Children(func() {
 				ui.Icon(c, IconTrash).Size(14, 14)
 			}).Clicked() {
@@ -1141,6 +1153,78 @@ func (a *App) renderBatchSummaryModal(c *ui.Context) {
 						}
 					})
 				}
+			})
+	})
+}
+
+func (a *App) RenameActiveProject(newName string) {
+	newName = strings.TrimSpace(newName)
+	if newName == "" || newName == a.ActiveProject {
+		a.ShowRenameProjectModal = false
+		return
+	}
+
+	oldName := a.ActiveProject
+
+	// Prevent duplicate project names
+	for _, p := range a.Projects {
+		if p == newName {
+			return
+		}
+	}
+
+	// 1. Rename the state file on disk
+	oldPath := ProjectFilePath(oldName)
+	newPath := ProjectFilePath(newName)
+	if _, err := os.Stat(oldPath); err == nil {
+		_ = os.Rename(oldPath, newPath)
+	} else {
+		_ = SaveProjectState(newName, a.Articles)
+	}
+
+	// 2. Update project in list
+	for i, p := range a.Projects {
+		if p == oldName {
+			a.Projects[i] = newName
+			break
+		}
+	}
+
+	// 3. Migrate state in settings.json
+	if st, ok := a.Settings.ProjectStates[oldName]; ok {
+		a.Settings.ProjectStates[newName] = st
+		delete(a.Settings.ProjectStates, oldName)
+	}
+	a.ActiveProject = newName
+	a.updateActiveProjectIdx()
+	a.Settings.LastProject = newName
+	_ = a.Settings.Save()
+
+	a.ShowRenameProjectModal = false
+}
+
+func (a *App) renderRenameProjectModal(c *ui.Context) {
+	ui.DialogBase(c, &a.ShowRenameProjectModal, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+		panel.Width(340).
+			Padding(20).
+			Gap(14).
+			Background(a.Theme.CardBg).
+			Border(1, a.Theme.Border).
+			Radius(10).
+			Justify(ui.Start).
+			Children(func() {
+				ui.Text(c, "Rename Project").FontSize(15).Bold().TextColor(a.Theme.Text)
+				ui.TextInput(c, &a.RenameProjectName).Placeholder("New project name...").AutoFocus()
+
+				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowRenameProjectModal = false
+					}
+					if ui.PrimaryButton(c, "Rename").Clicked() {
+						a.RenameActiveProject(a.RenameProjectName)
+					}
+				})
 			})
 	})
 }

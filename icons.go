@@ -35,6 +35,9 @@ var (
 	// actions: edit-select-all-symbolic
 	IconSelectAll = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M1 2v2h2V2H1zm4 0v2h2V2H5zm4 0v2h2V2H9zm4 0v2h2V2h-2zM1 6v2h2V6H1zm12 0v2h2V6h-2zM1 10v2h2v-2H1zm12 0v2h2v-2h-2zM1 14v2h2v-2H1zm4 0v2h2v-2H5zm4 0v2h2v-2H9zm4 0v2h2v-2h-2zm-6.5-7.5L5 8l3 3 5-5-1.5-1.5L8 8 6.5 6.5z"/></svg>`))
 
+	// actions: document-edit-symbolic
+	IconEdit = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61a2 2 0 0 1-.947.534l-3.666.916a.75.75 0 0 1-.91-.91l.916-3.667a2 2 0 0 1 .534-.946l8.61-8.61.513.514zM12.427 2.487a.25.25 0 0 0-.354 0L11 3.56l2.44 2.44 1.073-1.073a.25.25 0 0 0 0-.354l-1.086-1.086zM12.38 7.06L9.94 4.62 3.284 11.275a.5.5 0 0 0-.134.237l-.612 2.448 2.448-.612a.5.5 0 0 0 .237-.134L12.38 7.06z"/></svg>`))
+
 	// ui: check-box-outline-blank (Clear selection)
 	IconSelectNone = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M3 3v10h10V3H3zm1.5 1.5h7v7h-7v-7z"/></svg>`))
 )
