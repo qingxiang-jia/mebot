@@ -61,6 +61,13 @@ type App struct {
 	ShowDeleteProjectConfirm bool
 	ShowDeleteArticleConfirm bool
 	ShowNewProjectModal      bool
+
+	// Batch Summary Matching State
+	ShowBatchSummaryModal bool
+	BatchPastedMarkdown   string
+	ParsedSummaryMatches  []ParsedSummaryBlock
+	UnmatchedOptions      []string
+	BatchMatchingStep     int // 0 = Paste input, 1 = Review matches
 }
 
 func NewApp() *App {
@@ -629,6 +636,7 @@ func (a *App) View(c *ui.Context) {
 		a.renderDeleteProjectModal(c)
 		a.renderDeleteArticleModal(c)
 		a.renderNewProjectModal(c)
+		a.renderBatchSummaryModal(c)
 	})
 }
 
@@ -672,6 +680,12 @@ func (a *App) renderToolbar(c *ui.Context) {
 			ui.Icon(c, IconDocument).Size(14, 14)
 		}).Clicked() {
 			a.ImportMarkdownFile()
+		}
+		// Batch AI Summary Matcher
+		if ui.Button(c, "").Tooltip("Match Pasted Summaries by Title").Children(func() {
+			ui.Icon(c, IconPaste).Size(14, 14)
+		}).Clicked() {
+			a.OpenBatchSummaryModal()
 		}
 		if ui.PrimaryButton(c, "").Tooltip("Export to Documents").Children(func() {
 			ui.Icon(c, IconExport).Size(14, 14)
@@ -963,6 +977,128 @@ func (a *App) renderDeleteArticleModal(c *ui.Context) {
 					a.ShowDeleteArticleConfirm = false
 				}
 			})
+		})
+	})
+}
+
+func (a *App) OpenBatchSummaryModal() {
+	a.BatchPastedMarkdown = ""
+	a.ParsedSummaryMatches = nil
+	a.UnmatchedOptions = nil
+	a.BatchMatchingStep = 0
+	a.ShowBatchSummaryModal = true
+}
+
+func (a *App) AnalyzeBatchMarkdown() {
+	blocks := ParsePastedSummaries(a.BatchPastedMarkdown)
+	if len(blocks) == 0 {
+		return
+	}
+	matched, options := MatchSummariesToUnmatched(blocks, a.Articles)
+	a.ParsedSummaryMatches = matched
+	a.UnmatchedOptions = options
+	a.BatchMatchingStep = 1
+}
+
+func (a *App) ApplyBatchMatches() {
+	// Map matched summaries to target articles
+	articleMap := make(map[string]*Article)
+	for _, art := range a.Articles {
+		articleMap[art.Title] = art
+	}
+
+	for _, block := range a.ParsedSummaryMatches {
+		if block.SelectedOption != OptionDoNotMatch {
+			if art, ok := articleMap[block.SelectedOption]; ok {
+				art.Summary = block.Body
+			}
+		}
+	}
+
+	// If currently active article was matched, update its editor buffer & markdown view
+	cur := a.CurrentArticle()
+	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
+		a.initCodeBuffer(cur.Summary)
+		a.ShowMarkdownRender = true
+	}
+
+	a.SaveNow()
+	a.ShowBatchSummaryModal = false
+}
+
+func (a *App) renderBatchSummaryModal(c *ui.Context) {
+	ui.Modal(c, &a.ShowBatchSummaryModal, func() {
+		ui.Column(c).Width(700).Height(560).Padding(16).Gap(12).
+			Background(a.Theme.SidebarBg).Radius(8).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
+				ui.Spacer(c)
+				if a.BatchMatchingStep == 1 {
+					if ui.Button(c, "Back to Edit").Clicked() {
+						a.BatchMatchingStep = 0
+					}
+				}
+			})
+
+			if a.BatchMatchingStep == 0 {
+				// Step 1: Paste Text Input
+				ui.Text(c, "Paste your markdown summaries below (separated by # or ## headings). Articles that already have summaries will be skipped.").
+					FontSize(12).TextColor(a.Theme.TextMuted)
+
+				ui.TextInput(c, &a.BatchPastedMarkdown).
+					Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
+					Grow(1)
+
+				ui.Row(c).Gap(8).Children(func() {
+					if ui.PrimaryButton(c, "Analyze & Match").Clicked() {
+						a.AnalyzeBatchMarkdown()
+					}
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowBatchSummaryModal = false
+					}
+				})
+			} else {
+				// Step 2: Review and Adjust Matches
+				ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
+					FontSize(12).TextColor(a.Theme.TextMuted)
+
+				ui.Scroll(c).Grow(1).Children(func() {
+					ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
+						for i := range a.ParsedSummaryMatches {
+							item := &a.ParsedSummaryMatches[i]
+
+							ui.Column(c).Padding(10).Radius(6).Background(a.Theme.CardBg).Gap(6).Children(func() {
+								// Parsed heading title
+								ui.Text(c, "Summary Title: "+item.RawTitle).
+									FontSize(13).Bold().TextColor(a.Theme.Text)
+
+								// Excerpt preview
+								excerpt := item.Body
+								if len([]rune(excerpt)) > 120 {
+									excerpt = string([]rune(excerpt)[:120]) + "..."
+								}
+								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
+
+								// Selector to fix/reassign match
+								ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+									ui.Text(c, "Assign to Article:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+									ui.Select(c, &item.SelectedOption, a.UnmatchedOptions).Width(350)
+								})
+							})
+						}
+					})
+				})
+
+				ui.Row(c).Gap(8).Children(func() {
+					if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
+						a.ApplyBatchMatches()
+					}
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowBatchSummaryModal = false
+					}
+				})
+			}
 		})
 	})
 }
