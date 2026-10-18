@@ -12,15 +12,21 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/richtext"
+	"golang.design/x/clipboard"
 )
 
 type App struct {
-	Projects       []string
-	ActiveProject  string
-	NewProjectName string
-	Articles       []*Article
-	ActiveIdx      int
+	Projects         []string
+	ActiveProjectIdx int
+	ActiveProject    string
+	NewProjectName   string
+	Articles         []*Article
+	ActiveIdx        int
+	LastClickedIdx   int
+
+	// Rich Text Editor Document
+	SummaryDoc *richtext.Document
 
 	// Auto-save & Debounce State
 	LastSavedAt   string
@@ -33,16 +39,18 @@ type App struct {
 	FontSizeOptions  []string
 	SelectedFontSize string
 
-	SummaryIsMd              bool
 	Theme                    Theme
 	SelectedDate             time.Time
 	ShowExportModal          bool
 	ShowDeleteProjectConfirm bool
 
-	mdOpts markdown.Options
+	// Article Deletion Confirmation
+	ShowDeleteArticleConfirm bool
+	ArticleIdxToDelete       int
 }
 
 func NewApp() *App {
+	_ = clipboard.Init()
 	mygo.Theme.SetSource(mygo.ThemeLight)
 
 	existingProjects := DiscoverProjects()
@@ -61,22 +69,24 @@ func NewApp() *App {
 
 	app := &App{
 		Projects:                 existingProjects,
-		ActiveProject:            "", // Left empty so initial boot won't overwrite disk
+		ActiveProjectIdx:         0,
+		ActiveProject:            "",
 		Articles:                 []*Article{},
 		ActiveIdx:                0,
+		LastClickedIdx:           0,
+		SummaryDoc:               richtext.NewDocument(richtext.NewText("")),
 		AvailableFonts:           fonts,
 		SelectedFont:             defaultFont,
 		FontSizeOptions:          fontSizeOptions,
 		SelectedFontSize:         "16",
-		SummaryIsMd:              false,
 		Theme:                    LightTheme(),
 		SelectedDate:             time.Now(),
 		ShowExportModal:          false,
 		ShowDeleteProjectConfirm: false,
-		mdOpts:                   markdown.Options{},
+		ShowDeleteArticleConfirm: false,
+		ArticleIdxToDelete:       -1,
 	}
 
-	// Safely load initial project without wiping its disk state
 	if initialProject != "" {
 		app.SwitchProject(initialProject)
 	}
@@ -94,11 +104,50 @@ func (a *App) CurrentFontSize() float32 {
 	return float32(sz)
 }
 
+func (a *App) CurrentFontFamily() string {
+	if a.SelectedFont != "" {
+		return a.SelectedFont
+	}
+	return "Serif"
+}
+
 func (a *App) CurrentArticle() *Article {
 	if a.ActiveIdx >= 0 && a.ActiveIdx < len(a.Articles) {
 		return a.Articles[a.ActiveIdx]
 	}
 	return nil
+}
+
+func (a *App) updateActiveProjectIdx() {
+	for i, p := range a.Projects {
+		if p == a.ActiveProject {
+			a.ActiveProjectIdx = i
+			return
+		}
+	}
+	a.ActiveProjectIdx = 0
+}
+
+func (a *App) syncSummaryDoc() {
+	cur := a.CurrentArticle()
+	if cur != nil {
+		a.SummaryDoc = richtext.NewDocument(richtext.NewText(cur.Summary))
+	} else {
+		a.SummaryDoc = richtext.NewDocument(richtext.NewText(""))
+	}
+}
+
+func (a *App) SelectArticle(idx int) {
+	if a.ActiveIdx == idx {
+		return
+	}
+	cur := a.CurrentArticle()
+	if cur != nil && a.SummaryDoc != nil {
+		cur.Summary = a.SummaryDoc.Text().Markdown()
+	}
+
+	a.ActiveIdx = idx
+	a.syncSummaryDoc()
 }
 
 func (a *App) TriggerDebouncedSave() {
@@ -123,6 +172,11 @@ func (a *App) SaveNow() {
 		a.debounceTimer.Stop()
 	}
 
+	cur := a.CurrentArticle()
+	if cur != nil && a.SummaryDoc != nil {
+		cur.Summary = a.SummaryDoc.Text().Markdown()
+	}
+
 	if a.ActiveProject != "" {
 		_ = SaveProjectState(a.ActiveProject, a.Articles)
 		a.LastSavedAt = time.Now().Format("15:04:05")
@@ -135,13 +189,14 @@ func (a *App) SwitchProject(newProject string) {
 		return
 	}
 
-	// Only save prior project if it genuinely had unsaved changes
 	if a.ActiveProject != "" && a.ActiveProject != newProject && a.IsDirty {
 		_ = SaveProjectState(a.ActiveProject, a.Articles)
 		a.IsDirty = false
 	}
 
 	a.ActiveProject = newProject
+	a.updateActiveProjectIdx()
+
 	loaded, err := LoadProjectState(newProject)
 	if err == nil {
 		a.Articles = loaded
@@ -149,6 +204,9 @@ func (a *App) SwitchProject(newProject string) {
 		a.Articles = []*Article{}
 	}
 	a.ActiveIdx = 0
+	a.LastClickedIdx = 0
+	a.syncSummaryDoc()
+
 	a.LastSavedAt = time.Now().Format("15:04:05")
 	a.IsDirty = false
 }
@@ -187,6 +245,7 @@ func (a *App) DeleteActiveProject() {
 	a.Projects = updated
 	a.Articles = []*Article{}
 	a.ActiveIdx = 0
+	a.syncSummaryDoc()
 
 	if len(a.Projects) > 0 {
 		a.SwitchProject(a.Projects[0])
@@ -198,8 +257,15 @@ func (a *App) DeleteActiveProject() {
 	a.ShowDeleteProjectConfirm = false
 }
 
-func (a *App) DeleteArticle(idx int) {
+func (a *App) RequestDeleteArticle(idx int) {
+	a.ArticleIdxToDelete = idx
+	a.ShowDeleteArticleConfirm = true
+}
+
+func (a *App) ConfirmDeleteArticle() {
+	idx := a.ArticleIdxToDelete
 	if idx < 0 || idx >= len(a.Articles) {
+		a.ShowDeleteArticleConfirm = false
 		return
 	}
 	a.Articles = append(a.Articles[:idx], a.Articles[idx+1:]...)
@@ -209,7 +275,42 @@ func (a *App) DeleteArticle(idx int) {
 	if a.ActiveIdx < 0 {
 		a.ActiveIdx = 0
 	}
+	a.syncSummaryDoc()
 	a.SaveNow()
+	a.ShowDeleteArticleConfirm = false
+}
+
+func (a *App) CopySelectedTitles() {
+	var titles []string
+	for _, art := range a.Articles {
+		if art.Selected {
+			titles = append(titles, art.Title)
+		}
+	}
+	if len(titles) == 0 && a.CurrentArticle() != nil {
+		titles = append(titles, a.CurrentArticle().Title)
+	}
+	if len(titles) > 0 {
+		clipboard.Write(clipboard.FmtText, []byte(strings.Join(titles, "\n")))
+	}
+}
+
+func (a *App) CopySelectedContents() {
+	var sb strings.Builder
+	hasAny := false
+	for _, art := range a.Articles {
+		if art.Selected {
+			sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n---\n\n", art.Title, art.FullText))
+			hasAny = true
+		}
+	}
+	if !hasAny && a.CurrentArticle() != nil {
+		art := a.CurrentArticle()
+		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n---\n\n", art.Title, art.FullText))
+	}
+	if sb.Len() > 0 {
+		clipboard.Write(clipboard.FmtText, []byte(sb.String()))
+	}
 }
 
 func (a *App) ImportHTMLFiles() {
@@ -230,6 +331,7 @@ func (a *App) ImportHTMLFiles() {
 			a.Articles = append(a.Articles, art)
 		}
 	}
+	a.syncSummaryDoc()
 	a.SaveNow()
 }
 
@@ -261,6 +363,7 @@ func (a *App) ImportMarkdownFile() {
 	}
 
 	a.Articles = append(a.Articles, parsed...)
+	a.syncSummaryDoc()
 	a.SaveNow()
 }
 
@@ -279,6 +382,12 @@ func (a *App) PerformExport() {
 		a.ShowExportModal = false
 		return
 	}
+
+	cur := a.CurrentArticle()
+	if cur != nil && a.SummaryDoc != nil {
+		cur.Summary = a.SummaryDoc.Text().Markdown()
+	}
+
 	fileName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
 	home, _ := os.UserHomeDir()
 	outPath := filepath.Join(home, "Documents", fileName)
@@ -289,6 +398,7 @@ func (a *App) PerformExport() {
 	_ = RemoveProjectState(a.ActiveProject)
 	a.Articles = []*Article{}
 	a.ActiveIdx = 0
+	a.syncSummaryDoc()
 
 	var updatedProjects []string
 	for _, p := range a.Projects {
@@ -310,46 +420,43 @@ func (a *App) PerformExport() {
 // ---------------- UI VIEW ----------------
 
 func (a *App) View(c *ui.Context) {
-	ui.Column(c).Fill().Background(a.Theme.Bg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		a.renderTopControlBar(c)
+	ui.Column(c).Fill().Background(a.Theme.ReadingBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		// 1. TOOLBAR with distinct background
+		a.renderToolbar(c)
 
+		// 2. MAIN WORKSPACE
 		ui.Row(c).Grow(1).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 			a.renderArticleListColumn(c)
 			a.renderFullTextColumn(c)
 			a.renderSummaryColumn(c)
 		})
 
+		// 3. DIALOG MODALS
 		a.renderExportModal(c)
 		a.renderDeleteProjectModal(c)
+		a.renderDeleteArticleModal(c)
 	})
 }
 
-func (a *App) renderTopControlBar(c *ui.Context) {
-	ui.Row(c).Padding(8, 12).Gap(8).Background(a.Theme.PanelBg).AlignItems(ui.Center).Children(func() {
-		// Project Creator
-		ui.TextInput(c, &a.NewProjectName).Placeholder("New project...").Width(130)
+func (a *App) renderToolbar(c *ui.Context) {
+	ui.Toolbar(c, func() {
+		ui.TextInput(c, &a.NewProjectName).Placeholder("New project...").Width(120)
 		if ui.Button(c, "+").Clicked() {
 			a.CreateProject(a.NewProjectName)
 		}
 
-		// Project Selector with change detection
 		if len(a.Projects) > 0 {
-			prevProject := a.ActiveProject
-			ui.Select(c, &a.ActiveProject, a.Projects)
-			if a.ActiveProject != prevProject {
-				selected := a.ActiveProject
-				a.ActiveProject = prevProject // Revert temporarily so SwitchProject can cleanly save it
-				a.SwitchProject(selected)
+			prevIdx := a.ActiveProjectIdx
+			ui.Segmented(c, &a.ActiveProjectIdx, a.Projects...).Label("Projects")
+			if a.ActiveProjectIdx != prevIdx && a.ActiveProjectIdx < len(a.Projects) {
+				a.SwitchProject(a.Projects[a.ActiveProjectIdx])
 			}
 
-			if ui.Button(c, "🗑 Project").Clicked() {
+			if ui.Button(c, "🗑").Clicked() {
 				a.ShowDeleteProjectConfirm = true
 			}
 		}
 
-		ui.Divider(c)
-
-		// Imports & Export
 		if ui.Button(c, "📥 HTML").Clicked() {
 			a.ImportHTMLFiles()
 		}
@@ -362,16 +469,12 @@ func (a *App) renderTopControlBar(c *ui.Context) {
 
 		ui.Spacer(c)
 
-		// Auto-save Indicator
 		if a.IsDirty {
 			ui.Text(c, "● Saving in 3s...").FontSize(11).TextColor(a.Theme.Accent)
 		} else if a.LastSavedAt != "" {
 			ui.Text(c, fmt.Sprintf("✓ Saved at %s", a.LastSavedAt)).FontSize(11).TextColor(a.Theme.TextMuted)
 		}
 
-		ui.Divider(c)
-
-		// Font Controls
 		ui.Text(c, "Font:").FontSize(12).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
 			ui.Select(c, &a.SelectedFont, a.AvailableFonts)
@@ -380,7 +483,6 @@ func (a *App) renderTopControlBar(c *ui.Context) {
 		ui.Text(c, "Size:").FontSize(12).TextColor(a.Theme.TextMuted)
 		ui.Select(c, &a.SelectedFontSize, a.FontSizeOptions)
 
-		// Theme Switch
 		modeLabel := "🌙 Dark"
 		if a.Theme.IsDark {
 			modeLabel = "☀️ Light"
@@ -388,14 +490,15 @@ func (a *App) renderTopControlBar(c *ui.Context) {
 		if ui.Button(c, modeLabel).Clicked() {
 			a.ToggleTheme()
 		}
-	})
+	}).Background(a.Theme.ToolbarBg).Label("Mebot Controls")
 }
 
 func (a *App) renderArticleListColumn(c *ui.Context) {
-	ui.Column(c).Width(320).Padding(10).Gap(6).Background(a.Theme.PanelBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Width(330).Padding(10).Gap(6).Background(a.Theme.SidebarBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
 			ui.Text(c, fmt.Sprintf("Articles (%d)", len(a.Articles))).Bold().TextColor(a.Theme.Text)
 			ui.Spacer(c)
+
 			if ui.Button(c, "All").Clicked() {
 				for _, art := range a.Articles {
 					art.Selected = true
@@ -405,6 +508,13 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 				for _, art := range a.Articles {
 					art.Selected = false
 				}
+			}
+
+			if ui.Button(c, "📋 Titles").Clicked() {
+				a.CopySelectedTitles()
+			}
+			if ui.Button(c, "📄 Content").Clicked() {
+				a.CopySelectedContents()
 			}
 		})
 
@@ -416,16 +526,31 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 				for idx, art := range a.Articles {
 					ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 						ui.Checkbox(c, &art.Selected, "")
+
 						itemBtn := ui.Button(c, art.Title).Grow(1)
 						if idx == a.ActiveIdx {
 							itemBtn.Bold()
 						}
+
 						if itemBtn.Clicked() {
-							a.ActiveIdx = idx
+							isShift := (c.Modifiers() & ui.Shift) != 0
+							if isShift && a.LastClickedIdx >= 0 && a.LastClickedIdx < len(a.Articles) {
+								start := a.LastClickedIdx
+								end := idx
+								if start > end {
+									start, end = end, start
+								}
+								for i := start; i <= end; i++ {
+									a.Articles[i].Selected = true
+								}
+							} else {
+								a.LastClickedIdx = idx
+							}
+							a.SelectArticle(idx)
 						}
 
 						if ui.Button(c, "✕").Clicked() {
-							a.DeleteArticle(idx)
+							a.RequestDeleteArticle(idx)
 						}
 					})
 				}
@@ -436,7 +561,7 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 
 func (a *App) renderFullTextColumn(c *ui.Context) {
 	current := a.CurrentArticle()
-	ui.Column(c).Grow(1).Padding(14).Gap(10).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+	ui.Column(c).Grow(1).Padding(16).Gap(10).Background(a.Theme.ReadingBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 		ui.Text(c, "FULL TEXT").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
 
 		if current == nil {
@@ -444,10 +569,15 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 			return
 		}
 
-		ui.Text(c, current.Title).FontSize(a.CurrentFontSize() + 4).Bold().TextColor(a.Theme.Text)
+		ui.Text(c, current.Title).
+			Font(a.CurrentFontFamily()).
+			FontSize(a.CurrentFontSize() + 4).
+			Bold().
+			TextColor(a.Theme.Text)
 
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Text(c, current.FullText).
+				Font(a.CurrentFontFamily()).
 				FontSize(a.CurrentFontSize()).
 				TextColor(a.Theme.Text)
 		})
@@ -456,51 +586,125 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 
 func (a *App) renderSummaryColumn(c *ui.Context) {
 	current := a.CurrentArticle()
-	ui.Column(c).Grow(1).Padding(14).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "SUMMARY").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-			ui.Spacer(c)
-			toggleLabel := "View Rendered"
-			if a.SummaryIsMd {
-				toggleLabel = "Edit Raw"
-			}
-			if ui.Button(c, toggleLabel).Clicked() {
-				a.SummaryIsMd = !a.SummaryIsMd
-			}
-		})
+	ui.Column(c).Grow(1).Padding(14).Gap(8).Background(a.Theme.EditorBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		ui.Text(c, "SUMMARY").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
 
 		if current == nil {
 			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
 			return
 		}
 
-		if a.SummaryIsMd {
-			ui.Scroll(c).Grow(1).Children(func() {
-				markdown.View(c, current.Summary, &a.mdOpts)
-			})
-		} else {
-			prevSummary := current.Summary
-			ui.TextArea(c, &current.Summary).
-				Grow(1).
-				FontSize(a.CurrentFontSize())
+		if a.SummaryDoc == nil {
+			a.SummaryDoc = richtext.NewDocument(richtext.NewText(current.Summary))
+		}
 
-			if current.Summary != prevSummary {
-				a.TriggerDebouncedSave()
-			}
+		a.renderRichTextToolbar(c)
+
+		editorOpts := richtext.EditorOptions{
+			Font: ui.Font{
+				Family: a.CurrentFontFamily(),
+				Size:   a.CurrentFontSize(),
+			},
+		}
+
+		if richtext.Editor(c, a.SummaryDoc, editorOpts).Fill().Changed() {
+			current.Summary = a.SummaryDoc.Text().Markdown()
+			a.TriggerDebouncedSave()
+		}
+	})
+}
+
+func (a *App) renderRichTextToolbar(c *ui.Context) {
+	f := a.SummaryDoc.Formatting()
+
+	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, "↶").KeepFocus().Clicked() {
+			a.SummaryDoc.Undo()
+		}
+		if ui.Button(c, "↷").KeepFocus().Clicked() {
+			a.SummaryDoc.Redo()
+		}
+
+		ui.Divider(c)
+
+		btnBold := ui.Button(c, "B").Bold().KeepFocus()
+		if f.Bold == richtext.FormatOn {
+			btnBold.Background(a.Theme.Accent)
+		}
+		if btnBold.Clicked() {
+			a.SummaryDoc.ToggleBold()
+		}
+
+		btnItalic := ui.Button(c, "I").Italic().KeepFocus()
+		if f.Italic == richtext.FormatOn {
+			btnItalic.Background(a.Theme.Accent)
+		}
+		if btnItalic.Clicked() {
+			a.SummaryDoc.ToggleItalic()
+		}
+
+		btnUnderline := ui.Button(c, "U").KeepFocus()
+		if f.Underline == richtext.FormatOn {
+			btnUnderline.Background(a.Theme.Accent)
+		}
+		if btnUnderline.Clicked() {
+			a.SummaryDoc.ToggleUnderline()
+		}
+
+		btnStrike := ui.Button(c, "S̶").KeepFocus()
+		if f.Strikethrough == richtext.FormatOn {
+			btnStrike.Background(a.Theme.Accent)
+		}
+		if btnStrike.Clicked() {
+			a.SummaryDoc.ToggleStrikethrough()
+		}
+
+		btnCode := ui.Button(c, "</>").KeepFocus()
+		if f.Code == richtext.FormatOn {
+			btnCode.Background(a.Theme.Accent)
+		}
+		if btnCode.Clicked() {
+			a.SummaryDoc.ToggleCode()
+		}
+
+		ui.Divider(c)
+
+		if ui.Button(c, "H1").KeepFocus().Clicked() {
+			a.SummaryDoc.SetHeading(1)
+		}
+		if ui.Button(c, "H2").KeepFocus().Clicked() {
+			a.SummaryDoc.SetHeading(2)
+		}
+
+		if ui.Button(c, "• List").KeepFocus().Clicked() {
+			a.SummaryDoc.ToggleList(richtext.Bullets)
+		}
+		if ui.Button(c, "1. List").KeepFocus().Clicked() {
+			a.SummaryDoc.ToggleList(richtext.Numbers)
+		}
+		if ui.Button(c, "☑ Task").KeepFocus().Clicked() {
+			a.SummaryDoc.ToggleList(richtext.Tasks)
+		}
+
+		if ui.Button(c, "“ Quote").KeepFocus().Clicked() {
+			a.SummaryDoc.ToggleQuote()
+		}
+		if ui.Button(c, "Code Block").KeepFocus().Clicked() {
+			a.SummaryDoc.ToggleCodeBlock()
 		}
 	})
 }
 
 func (a *App) renderExportModal(c *ui.Context) {
 	ui.Modal(c, &a.ShowExportModal, func() {
-		ui.Column(c).Width(420).Padding(18).Gap(12).Background(a.Theme.PanelBg).Justify(ui.Start).Children(func() {
-			ui.Text(c, "Export Weekly Rollup").FontSize(16).Bold().TextColor(a.Theme.Text)
+		ui.Column(c).Width(280).Padding(14).Gap(10).Background(a.Theme.SidebarBg).Justify(ui.Start).Children(func() {
+			ui.Text(c, "Export Weekly Rollup").FontSize(15).Bold().TextColor(a.Theme.Text)
 
-			ui.Text(c, "Select Export Date:").FontSize(12).TextColor(a.Theme.TextMuted)
+			ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
 			ui.Calendar(c, &a.SelectedDate)
 
 			exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-			ui.Text(c, "Output: Documents/"+exportName).FontSize(13).Bold().TextColor(a.Theme.Accent)
+			ui.Text(c, exportName).FontSize(12).Bold().TextColor(a.Theme.Accent)
 
 			ui.Row(c).Gap(8).Children(func() {
 				if ui.PrimaryButton(c, "Confirm & Export").Clicked() {
@@ -516,9 +720,9 @@ func (a *App) renderExportModal(c *ui.Context) {
 
 func (a *App) renderDeleteProjectModal(c *ui.Context) {
 	ui.Modal(c, &a.ShowDeleteProjectConfirm, func() {
-		ui.Column(c).Width(360).Padding(18).Gap(12).Background(a.Theme.PanelBg).Justify(ui.Start).Children(func() {
-			ui.Text(c, "Delete Project").FontSize(16).Bold().TextColor(a.Theme.Accent)
-			ui.Text(c, fmt.Sprintf("Are you sure you want to delete project '%s' and all its saved state?", a.ActiveProject)).
+		ui.Column(c).Width(340).Padding(16).Gap(12).Background(a.Theme.SidebarBg).Justify(ui.Start).Children(func() {
+			ui.Text(c, "Delete Project").FontSize(15).Bold().TextColor(a.Theme.Accent)
+			ui.Text(c, fmt.Sprintf("Are you sure you want to delete '%s' and all its articles?", a.ActiveProject)).
 				FontSize(13).TextColor(a.Theme.Text)
 
 			ui.Row(c).Gap(8).Children(func() {
@@ -533,7 +737,33 @@ func (a *App) renderDeleteProjectModal(c *ui.Context) {
 	})
 }
 
+func (a *App) renderDeleteArticleModal(c *ui.Context) {
+	ui.Modal(c, &a.ShowDeleteArticleConfirm, func() {
+		title := "this article"
+		if a.ArticleIdxToDelete >= 0 && a.ArticleIdxToDelete < len(a.Articles) {
+			title = fmt.Sprintf("'%s'", a.Articles[a.ArticleIdxToDelete].Title)
+		}
+
+		ui.Column(c).Width(340).Padding(16).Gap(12).Background(a.Theme.SidebarBg).Justify(ui.Start).Children(func() {
+			ui.Text(c, "Delete Article").FontSize(15).Bold().TextColor(a.Theme.Accent)
+			ui.Text(c, fmt.Sprintf("Are you sure you want to delete %s?", title)).
+				FontSize(13).TextColor(a.Theme.Text)
+
+			ui.Row(c).Gap(8).Children(func() {
+				if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
+					a.ConfirmDeleteArticle()
+				}
+				if ui.Button(c, "Cancel").Clicked() {
+					a.ShowDeleteArticleConfirm = false
+				}
+			})
+		})
+	})
+}
+
 func main() {
+	os.Setenv("MYGO_GPU", "0")
+
 	app := NewApp()
 
 	mygo.App.WhenReady(func() {
