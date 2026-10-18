@@ -896,67 +896,93 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 }
 
 func (a *App) renderNewProjectModal(c *ui.Context) {
-	ui.Modal(c, &a.ShowNewProjectModal, func() {
-		ui.Column(c).Width(320).Padding(16).Gap(12).Background(a.Theme.SidebarBg).Radius(8).Justify(ui.Start).Children(func() {
-			ui.Text(c, "New Project").FontSize(15).Bold().TextColor(a.Theme.Text)
-			ui.TextInput(c, &a.NewProjectName).Placeholder("Project name...")
+	ui.DialogBase(c, &a.ShowNewProjectModal, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+		panel.Width(340).
+			Padding(20).
+			Gap(14).
+			Background(a.Theme.CardBg).
+			Border(1, a.Theme.Border).
+			Radius(10).
+			Justify(ui.Start).
+			Children(func() {
+				ui.Text(c, "New Project").FontSize(15).Bold().TextColor(a.Theme.Text)
+				ui.TextInput(c, &a.NewProjectName).Placeholder("Project name...").AutoFocus()
 
-			ui.Row(c).Gap(8).Children(func() {
-				if ui.PrimaryButton(c, "Create").Clicked() {
-					a.CreateProject(a.NewProjectName)
-				}
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowNewProjectModal = false
-				}
+				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowNewProjectModal = false
+					}
+					if ui.PrimaryButton(c, "Create").Clicked() {
+						a.CreateProject(a.NewProjectName)
+					}
+				})
 			})
-		})
 	})
 }
 
 func (a *App) renderExportModal(c *ui.Context) {
-	ui.Modal(c, &a.ShowExportModal, func() {
-		ui.Column(c).Width(280).Padding(14).Gap(10).Background(a.Theme.SidebarBg).Radius(8).Justify(ui.Start).Children(func() {
-			ui.Text(c, "Export Weekly Rollup").FontSize(15).Bold().TextColor(a.Theme.Text)
+	ui.DialogBase(c, &a.ShowExportModal, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+		panel.Width(290).
+			Padding(18).
+			Gap(12).
+			Background(a.Theme.CardBg).
+			Border(1, a.Theme.Border).
+			Radius(10).
+			Justify(ui.Start).
+			Children(func() {
+				ui.Text(c, "Export Weekly Rollup").FontSize(15).Bold().TextColor(a.Theme.Text)
 
-			ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
-			ui.Calendar(c, &a.SelectedDate)
+				ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
+				ui.Calendar(c, &a.SelectedDate)
 
-			exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-			ui.Text(c, exportName).FontSize(12).Bold().TextColor(a.Theme.Accent)
+				exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
+				ui.Text(c, exportName).FontSize(12).Bold().TextColor(a.Theme.Accent)
 
-			ui.Row(c).Gap(8).Children(func() {
-				if ui.PrimaryButton(c, "Confirm & Export").Clicked() {
-					a.PerformExport()
-				}
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowExportModal = false
-				}
+				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowExportModal = false
+					}
+					if ui.PrimaryButton(c, "Confirm & Export").Clicked() {
+						a.PerformExport()
+					}
+				})
 			})
-		})
 	})
 }
 
 func (a *App) renderDeleteProjectModal(c *ui.Context) {
-	ui.Modal(c, &a.ShowDeleteProjectConfirm, func() {
-		ui.Column(c).Width(340).Padding(16).Gap(12).Background(a.Theme.SidebarBg).Radius(8).Justify(ui.Start).Children(func() {
-			ui.Text(c, "Delete Project").FontSize(15).Bold().TextColor(a.Theme.Accent)
-			ui.Text(c, fmt.Sprintf("Are you sure you want to delete '%s' and all its articles?", a.ActiveProject)).
-				FontSize(13).TextColor(a.Theme.Text)
+	ui.DialogBase(c, &a.ShowDeleteProjectConfirm, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+		panel.Width(340).
+			Padding(20).
+			Gap(14).
+			Background(a.Theme.CardBg).
+			Border(1, a.Theme.Border).
+			Radius(10).
+			Justify(ui.Start).
+			Children(func() {
+				ui.Text(c, "Delete Project").FontSize(15).Bold().TextColor(a.Theme.Accent)
+				ui.Text(c, fmt.Sprintf("Are you sure you want to delete '%s' and all its articles?", a.ActiveProject)).
+					FontSize(13).TextColor(a.Theme.Text)
 
-			ui.Row(c).Gap(8).Children(func() {
-				if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
-					a.DeleteActiveProject()
-				}
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowDeleteProjectConfirm = false
-				}
+				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowDeleteProjectConfirm = false
+					}
+					if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
+						a.DeleteActiveProject()
+					}
+				})
 			})
-		})
 	})
 }
 
 func (a *App) renderDeleteArticleModal(c *ui.Context) {
-	ui.Modal(c, &a.ShowDeleteArticleConfirm, func() {
+	ui.DialogBase(c, &a.ShowDeleteArticleConfirm, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+
 		count := a.ChosenArticles.Len()
 		msg := "Are you sure you want to delete the selected article?"
 		if count > 1 {
@@ -965,19 +991,26 @@ func (a *App) renderDeleteArticleModal(c *ui.Context) {
 			msg = fmt.Sprintf("Are you sure you want to delete '%s'?", a.CurrentArticle().Title)
 		}
 
-		ui.Column(c).Width(340).Padding(16).Gap(12).Background(a.Theme.SidebarBg).Radius(8).Justify(ui.Start).Children(func() {
-			ui.Text(c, "Delete Article").FontSize(15).Bold().TextColor(a.Theme.Accent)
-			ui.Text(c, msg).FontSize(13).TextColor(a.Theme.Text)
+		panel.Width(340).
+			Padding(20).
+			Gap(14).
+			Background(a.Theme.CardBg).
+			Border(1, a.Theme.Border).
+			Radius(10).
+			Justify(ui.Start).
+			Children(func() {
+				ui.Text(c, "Delete Article").FontSize(15).Bold().TextColor(a.Theme.Accent)
+				ui.Text(c, msg).FontSize(13).TextColor(a.Theme.Text)
 
-			ui.Row(c).Gap(8).Children(func() {
-				if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
-					a.ConfirmDeleteChosenArticles()
-				}
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowDeleteArticleConfirm = false
-				}
+				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+					if ui.Button(c, "Cancel").Clicked() {
+						a.ShowDeleteArticleConfirm = false
+					}
+					if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
+						a.ConfirmDeleteChosenArticles()
+					}
+				})
 			})
-		})
 	})
 }
 
@@ -1027,79 +1060,88 @@ func (a *App) ApplyBatchMatches() {
 }
 
 func (a *App) renderBatchSummaryModal(c *ui.Context) {
-	ui.Modal(c, &a.ShowBatchSummaryModal, func() {
-		ui.Column(c).Width(700).Height(560).Padding(16).Gap(12).
-			Background(a.Theme.SidebarBg).Radius(8).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
-				ui.Spacer(c)
-				if a.BatchMatchingStep == 1 {
-					if ui.Button(c, "Back to Edit").Clicked() {
-						a.BatchMatchingStep = 0
-					}
-				}
-			})
-
-			if a.BatchMatchingStep == 0 {
-				// Step 1: Paste Text Input
-				ui.Text(c, "Paste your markdown summaries below (separated by # or ## headings). Articles that already have summaries will be skipped.").
-					FontSize(12).TextColor(a.Theme.TextMuted)
-
-				ui.TextInput(c, &a.BatchPastedMarkdown).
-					Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
-					Grow(1)
-
-				ui.Row(c).Gap(8).Children(func() {
-					if ui.PrimaryButton(c, "Analyze & Match").Clicked() {
-						a.AnalyzeBatchMarkdown()
-					}
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowBatchSummaryModal = false
+	ui.DialogBase(c, &a.ShowBatchSummaryModal, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+		panel.Width(680).
+			Height(540).
+			Padding(20).
+			Gap(14).
+			Background(a.Theme.CardBg).
+			Border(1, a.Theme.Border).
+			Radius(12).
+			Justify(ui.Start).
+			AlignItems(ui.Stretch).
+			Children(func() {
+				ui.Row(c).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
+					ui.Spacer(c)
+					if a.BatchMatchingStep == 1 {
+						if ui.Button(c, "Back to Edit").Clicked() {
+							a.BatchMatchingStep = 0
+						}
 					}
 				})
-			} else {
-				// Step 2: Review and Adjust Matches
-				ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
-					FontSize(12).TextColor(a.Theme.TextMuted)
 
-				ui.Scroll(c).Grow(1).Children(func() {
-					ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
-						for i := range a.ParsedSummaryMatches {
-							item := &a.ParsedSummaryMatches[i]
+				if a.BatchMatchingStep == 0 {
+					ui.Text(c, "Paste your markdown summaries below (separated by # or ## headings). Articles that already have summaries will be skipped.").
+						FontSize(12).TextColor(a.Theme.TextMuted)
 
-							ui.Column(c).Padding(10).Radius(6).Background(a.Theme.CardBg).Gap(6).Children(func() {
-								// Parsed heading title
-								ui.Text(c, "Summary Title: "+item.RawTitle).
-									FontSize(13).Bold().TextColor(a.Theme.Text)
+					ui.TextInput(c, &a.BatchPastedMarkdown).
+						Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
+						Grow(1)
 
-								// Excerpt preview
-								excerpt := item.Body
-								if len([]rune(excerpt)) > 120 {
-									excerpt = string([]rune(excerpt)[:120]) + "..."
-								}
-								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
-
-								// Selector to fix/reassign match
-								ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-									ui.Text(c, "Assign to Article:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-									ui.Select(c, &item.SelectedOption, a.UnmatchedOptions).Width(350)
-								})
-							})
+					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+						if ui.Button(c, "Cancel").Clicked() {
+							a.ShowBatchSummaryModal = false
+						}
+						if ui.PrimaryButton(c, "Analyze & Match").Clicked() {
+							a.AnalyzeBatchMarkdown()
 						}
 					})
-				})
+				} else {
+					ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
+						FontSize(12).TextColor(a.Theme.TextMuted)
 
-				ui.Row(c).Gap(8).Children(func() {
-					if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
-						a.ApplyBatchMatches()
-					}
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowBatchSummaryModal = false
-					}
-				})
-			}
-		})
+					ui.Scroll(c).Grow(1).Children(func() {
+						ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
+							for i := range a.ParsedSummaryMatches {
+								item := &a.ParsedSummaryMatches[i]
+
+								ui.Column(c).
+									Padding(10).
+									Radius(6).
+									Background(a.Theme.SidebarBg).
+									Border(1, a.Theme.Border).
+									Gap(6).
+									Children(func() {
+										ui.Text(c, "Summary Title: "+item.RawTitle).
+											FontSize(13).Bold().TextColor(a.Theme.Text)
+
+										excerpt := item.Body
+										if len([]rune(excerpt)) > 120 {
+											excerpt = string([]rune(excerpt)[:120]) + "..."
+										}
+										ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
+
+										ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+											ui.Text(c, "Assign to:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+											ui.Select(c, &item.SelectedOption, a.UnmatchedOptions).Width(340)
+										})
+									})
+							}
+						})
+					})
+
+					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+						if ui.Button(c, "Cancel").Clicked() {
+							a.ShowBatchSummaryModal = false
+						}
+						if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
+							a.ApplyBatchMatches()
+						}
+					})
+				}
+			})
 	})
 }
 
