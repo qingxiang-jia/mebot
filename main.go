@@ -849,13 +849,23 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			return
 		}
 
+		// 1. Apply font selection and font size to Markdown preview
+		if a.mdOpts.Theme == nil {
+			a.mdOpts.Theme = &markdown.Theme{}
+		}
+		a.mdOpts.Theme.Font = a.CurrentFontFamily()
+		a.mdOpts.Theme.FontSize = a.CurrentFontSize()
+
 		if a.ShowMarkdownRender {
 			ui.Scroll(c).Grow(1).Children(func() {
 				markdown.View(c, current.Summary, &a.mdOpts)
 			})
 		} else {
 			if a.CodeState != nil {
-				// Keep editor text selection & cursor in sync with the macOS accent color
+				// 2. Apply font size to the Code Editor content
+				a.CodeState.Font = ui.Font{
+					Size: a.CurrentFontSize(),
+				}
 				a.CodeState.Theme = editor.DefaultTheme(c.Theme())
 
 				editor.View(c, a.CodeState).Grow(1).FillWidth()
