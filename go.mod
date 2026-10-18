@@ -1,0 +1,36 @@
+module mebot
+
+go 1.27.1
+
+require (
+	github.com/egoist/mygo v0.5.5
+	github.com/markusmobius/go-trafilatura/v2 v2.2.6
+	golang.design/x/clipboard v0.7.0
+)
+
+require (
+	github.com/andybalholm/cascadia v1.3.5 // indirect
+	github.com/ebitengine/purego v0.11.1 // indirect
+	github.com/forPelevin/gomoji v1.3.0 // indirect
+	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
+	github.com/go-text/typesetting v0.3.5 // indirect
+	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
+	github.com/markusmobius/go-dateparser v1.4.7 // indirect
+	github.com/markusmobius/go-dateutil/v2 v2.9.1 // indirect
+	github.com/markusmobius/go-htmldate v1.10.1 // indirect
+	github.com/markusmobius/go-py3langid v0.4.0 // indirect
+	github.com/mattn/go-colorable v0.1.15 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/rs/zerolog v1.35.1 // indirect
+	github.com/tetratelabs/wazero v1.12.0 // indirect
+	github.com/wasilibs/go-re2 v1.12.0 // indirect
+	github.com/wasilibs/wazero-helpers v0.0.0-20250123031827-cd30c44769bb // indirect
+	github.com/yosssi/gohtml v0.0.0-20201013000340-ee4748c638f4 // indirect
+	golang.org/x/exp/shiny v0.0.0-20261014143641-f0251eb4aa3e // indirect
+	golang.org/x/image v0.47.0 // indirect
+	golang.org/x/mobile v0.0.0-20260908204917-8b95e45f8d3e // indirect
+	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
+)
