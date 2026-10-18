@@ -597,6 +597,12 @@ func (a *App) PerformExport() {
 // ---------------- UI VIEW ----------------
 
 func (a *App) View(c *ui.Context) {
+	// 1. Unify all widget accent & selection colors to macOS list selection blue
+	t := *c.Theme()
+	t.Accent = a.Theme.ActiveRowBg
+	t.AccentText = a.Theme.ActiveRowText
+	c.SetTheme(&t)
+
 	// Sync active article when user clicks or uses keyboard arrows
 	if a.ActiveIdx != a.LastActiveIdx && a.ActiveIdx >= 0 && a.ActiveIdx < len(a.Articles) {
 		a.SelectArticle(a.ActiveIdx)
@@ -847,6 +853,9 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			})
 		} else {
 			if a.CodeState != nil {
+				// Keep editor text selection & cursor in sync with the macOS accent color
+				a.CodeState.Theme = editor.DefaultTheme(c.Theme())
+
 				editor.View(c, a.CodeState).Grow(1).FillWidth()
 
 				latestText := a.CodeState.Buffer.String()
