@@ -12,7 +12,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
-	"golang.design/x/clipboard"
 )
 
 type App struct {
@@ -22,7 +21,6 @@ type App struct {
 	Articles       []*Article
 	ActiveIdx      int
 
-	// Fonts & Numerical Font Sizes (*string for ui.Select)
 	AvailableFonts   []string
 	SelectedFont     string
 	FontSizeOptions  []string
@@ -37,7 +35,8 @@ type App struct {
 }
 
 func NewApp() *App {
-	_ = clipboard.Init()
+	mygo.Theme.SetSource(mygo.ThemeLight)
+
 	existingProjects := DiscoverProjects()
 	initialProject := ""
 	if len(existingProjects) > 0 {
@@ -62,7 +61,7 @@ func NewApp() *App {
 		FontSizeOptions:  fontSizeOptions,
 		SelectedFontSize: "16",
 		SummaryIsMd:      false,
-		Theme:            DarkTheme(),
+		Theme:            LightTheme(),
 		SelectedDate:     time.Now(),
 		ShowExportModal:  false,
 		mdOpts:           markdown.Options{},
@@ -123,12 +122,16 @@ func (a *App) CreateProject(name string) {
 }
 
 func (a *App) ImportHTMLFiles() {
-	if a.ActiveProject == "" {
-		return
-	}
-	files, err := PickFiles("Select HTML Article(s)", true, "HTML files (*.html *.htm) | *.html *.htm")
+	files, err := PickFiles("Select HTML Article(s)", true, "*.html", "*.htm")
 	if err != nil || len(files) == 0 {
 		return
+	}
+
+	// Auto-create a project if none exists
+	if a.ActiveProject == "" {
+		base := filepath.Base(files[0])
+		projName := strings.TrimSuffix(base, filepath.Ext(base))
+		a.CreateProject(projName)
 	}
 
 	for _, f := range files {
@@ -141,47 +144,44 @@ func (a *App) ImportHTMLFiles() {
 }
 
 func (a *App) ImportMarkdownFile() {
-	if a.ActiveProject == "" {
-		return
-	}
-	files, err := PickFiles("Select Markdown Rollup", false, "Markdown files (*.md) | *.md")
+	files, err := PickFiles("Select Markdown Rollup", false, "*.md", "*.markdown")
 	if err != nil || len(files) == 0 {
 		return
 	}
 
-	data, err := os.ReadFile(files[0])
+	filePath := files[0]
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return
 	}
 
 	parsed, err := ParseMarkdownRollup(string(data))
-	if err == nil && len(parsed) > 0 {
-		a.Articles = append(a.Articles, parsed...)
-		_ = SaveProjectState(a.ActiveProject, a.Articles)
+	if err != nil || len(parsed) == 0 {
+		return
 	}
+
+	// Auto-create project if none exists (e.g. "2026-10-18 Economist.md" -> "Economist")
+	if a.ActiveProject == "" {
+		base := filepath.Base(filePath)
+		projName := strings.TrimSuffix(base, filepath.Ext(base))
+		parts := strings.SplitN(projName, " ", 2)
+		if len(parts) == 2 && len(parts[0]) == 10 && strings.Count(parts[0], "-") == 2 {
+			projName = parts[1]
+		}
+		a.CreateProject(projName)
+	}
+
+	a.Articles = append(a.Articles, parsed...)
+	_ = SaveProjectState(a.ActiveProject, a.Articles)
 }
 
-func (a *App) CopyTitlesForGoogleTasks() {
-	var titles []string
-	for _, art := range a.Articles {
-		if art.Selected {
-			titles = append(titles, art.Title)
-		}
-	}
-	if len(titles) > 0 {
-		clipboard.Write(clipboard.FmtText, []byte(strings.Join(titles, "\n")))
-	}
-}
-
-func (a *App) CopyContentForChatGPT() {
-	var sb strings.Builder
-	for _, art := range a.Articles {
-		if art.Selected {
-			sb.WriteString(fmt.Sprintf("# %s\n\n%s\n\n---\n\n", art.Title, art.FullText))
-		}
-	}
-	if sb.Len() > 0 {
-		clipboard.Write(clipboard.FmtText, []byte(sb.String()))
+func (a *App) ToggleTheme() {
+	if a.Theme.IsDark {
+		a.Theme = LightTheme()
+		mygo.Theme.SetSource(mygo.ThemeLight)
+	} else {
+		a.Theme = DarkTheme()
+		mygo.Theme.SetSource(mygo.ThemeDark)
 	}
 }
 
@@ -197,12 +197,10 @@ func (a *App) PerformExport() {
 	md := SerializeToMarkdown(a.Articles)
 	_ = os.WriteFile(outPath, []byte(md), 0644)
 
-	// Clean up temporary project state file
 	_ = RemoveProjectState(a.ActiveProject)
 	a.Articles = []*Article{}
 	a.ActiveIdx = 0
 
-	// Remove project from list
 	var updatedProjects []string
 	for _, p := range a.Projects {
 		if p != a.ActiveProject {
@@ -219,109 +217,75 @@ func (a *App) PerformExport() {
 	a.ShowExportModal = false
 }
 
+// ---------------- UI LAYOUT ----------------
+
 func (a *App) View(c *ui.Context) {
-	ui.Column(c).Fill().Background(a.Theme.Bg).Children(func() {
-		// 1. TOP TOOLBAR
-		a.renderHeader(c)
+	// Root container: sticks to top, stretches width
+	ui.Column(c).Fill().Background(a.Theme.Bg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		// Top fixed control toolbar
+		a.renderTopControlBar(c)
 
-		// 2. MAIN THREE-COLUMN VIEW
-		ui.Row(c).Fill().Children(func() {
-			// COLUMN 1: Leftmost Sidebar (Projects, Imports, Actions, Article list)
-			a.renderLeftSidebar(c)
-
-			// COLUMN 2: Full Text Reading Pane
-			a.renderFullTextPane(c)
-
-			// COLUMN 3: Summary Pane
-			a.renderSummaryPane(c)
+		// 3-Column main area: sticks to top, stretches height
+		ui.Row(c).Grow(1).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+			a.renderArticleListColumn(c)
+			a.renderFullTextColumn(c)
+			a.renderSummaryColumn(c)
 		})
 
-		// 3. EXPORT MODAL OVERLAY (managed by ui.Modal with &a.ShowExportModal)
 		a.renderExportModal(c)
 	})
 }
 
-func (a *App) renderHeader(c *ui.Context) {
-	ui.Row(c).Padding(10).Gap(10).Background(a.Theme.PanelBg).Children(func() {
-		ui.Text(c, "Mebot").FontSize(18).Bold().TextColor(a.Theme.Accent)
+func (a *App) renderTopControlBar(c *ui.Context) {
+	ui.Row(c).Padding(8, 12).Gap(8).Background(a.Theme.PanelBg).AlignItems(ui.Center).Children(func() {
+		// Project Creator Input
+		ui.TextInput(c, &a.NewProjectName).Placeholder("New project...").Width(140)
+		if ui.Button(c, "+").Clicked() {
+			a.CreateProject(a.NewProjectName)
+		}
+
+		if len(a.Projects) > 0 {
+			ui.Select(c, &a.ActiveProject, a.Projects)
+		}
+
+		ui.Divider(c)
+
+		// Imports & Export
+		if ui.Button(c, "📥 Import HTML").Clicked() {
+			a.ImportHTMLFiles()
+		}
+		if ui.Button(c, "📑 Import MD").Clicked() {
+			a.ImportMarkdownFile()
+		}
+		if ui.PrimaryButton(c, "Export").Clicked() {
+			a.ShowExportModal = true
+		}
 
 		ui.Spacer(c)
 
-		// Font selector dropdown (binds to *string)
 		ui.Text(c, "Font:").FontSize(12).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
 			ui.Select(c, &a.SelectedFont, a.AvailableFonts)
 		}
 
-		// Numerical Font Size dropdown (binds to *string)
 		ui.Text(c, "Size:").FontSize(12).TextColor(a.Theme.TextMuted)
 		ui.Select(c, &a.SelectedFontSize, a.FontSizeOptions)
 
-		// Dark / Light Mode Switch
 		modeLabel := "🌙 Dark"
 		if a.Theme.IsDark {
 			modeLabel = "☀️ Light"
 		}
 		if ui.Button(c, modeLabel).Clicked() {
-			if a.Theme.IsDark {
-				a.Theme = LightTheme()
-			} else {
-				a.Theme = DarkTheme()
-			}
+			a.ToggleTheme()
 		}
 	})
 }
 
-func (a *App) renderLeftSidebar(c *ui.Context) {
-	ui.Column(c).Width(320).Padding(10).Gap(8).Background(a.Theme.PanelBg).Children(func() {
-		// Project Creator & Selector
-		ui.Text(c, "PROJECTS").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-		ui.Row(c).Gap(4).Children(func() {
-			ui.TextInput(c, &a.NewProjectName).Placeholder("New project...").Grow(1)
-			if ui.Button(c, "+").Clicked() {
-				a.CreateProject(a.NewProjectName)
-			}
-		})
-
-		if len(a.Projects) > 0 {
-			ui.Row(c).Gap(4).Children(func() {
-				for _, p := range a.Projects {
-					btn := ui.Button(c, p)
-					if p == a.ActiveProject {
-						btn.Bold()
-					}
-					if btn.Clicked() {
-						a.SwitchProject(p)
-					}
-				}
-			})
-		}
-
-		ui.Divider(c)
-
-		// Imports
-		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, "📥 Import HTML").Clicked() {
-				a.ImportHTMLFiles()
-			}
-			if ui.Button(c, "📑 Import MD").Clicked() {
-				a.ImportMarkdownFile()
-			}
-		})
-
-		// Clipboard Actions
-		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, "Tasks 📋").Clicked() {
-				a.CopyTitlesForGoogleTasks()
-			}
-			if ui.Button(c, "Prompt 🤖").Clicked() {
-				a.CopyContentForChatGPT()
-			}
-		})
-
-		// Multi-select controls
-		ui.Row(c).Children(func() {
-			ui.Text(c, fmt.Sprintf("Articles (%d)", len(a.Articles))).Bold()
+// Column 1: Leftmost Article List
+func (a *App) renderArticleListColumn(c *ui.Context) {
+	ui.Column(c).Width(300).Padding(10).Gap(6).Background(a.Theme.PanelBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, fmt.Sprintf("Articles (%d)", len(a.Articles))).Bold().TextColor(a.Theme.Text)
 			ui.Spacer(c)
 			if ui.Button(c, "All").Clicked() {
 				for _, art := range a.Articles {
@@ -335,11 +299,13 @@ func (a *App) renderLeftSidebar(c *ui.Context) {
 			}
 		})
 
-		// Article Scrollable List
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(4).Children(func() {
+			ui.Column(c).Gap(4).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+				if len(a.Articles) == 0 {
+					ui.Text(c, "No articles yet.").FontSize(12).TextColor(a.Theme.TextMuted)
+				}
 				for idx, art := range a.Articles {
-					ui.Row(c).Gap(6).Children(func() {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Checkbox(c, &art.Selected, "")
 						itemBtn := ui.Button(c, art.Title)
 						if idx == a.ActiveIdx {
@@ -352,27 +318,22 @@ func (a *App) renderLeftSidebar(c *ui.Context) {
 				}
 			})
 		})
-
-		// Export Trigger (Opens Modal)
-		if ui.PrimaryButton(c, "Export Rollup...").Clicked() {
-			a.ShowExportModal = true
-		}
 	})
 }
 
-func (a *App) renderFullTextPane(c *ui.Context) {
+// Column 2: Full Text Area (Aligned to top)
+func (a *App) renderFullTextColumn(c *ui.Context) {
 	current := a.CurrentArticle()
-	ui.Column(c).Grow(1).Padding(14).Gap(10).Children(func() {
+	ui.Column(c).Grow(1).Padding(14).Gap(10).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 		ui.Text(c, "FULL TEXT").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
 
 		if current == nil {
-			ui.Column(c).Grow(1).Center().Children(func() {
-				ui.Text(c, "No article selected").TextColor(a.Theme.TextMuted)
-			})
+			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
 			return
 		}
 
 		ui.Text(c, current.Title).FontSize(a.CurrentFontSize() + 4).Bold().TextColor(a.Theme.Text)
+
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Text(c, current.FullText).
 				FontSize(a.CurrentFontSize()).
@@ -381,15 +342,16 @@ func (a *App) renderFullTextPane(c *ui.Context) {
 	})
 }
 
-func (a *App) renderSummaryPane(c *ui.Context) {
+// Column 3: Summary Area (Aligned to top)
+func (a *App) renderSummaryColumn(c *ui.Context) {
 	current := a.CurrentArticle()
-	ui.Column(c).Grow(1).Padding(14).Gap(10).Background(a.Theme.CardBg).Children(func() {
-		ui.Row(c).Children(func() {
+	ui.Column(c).Grow(1).Padding(14).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "SUMMARY").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
 			ui.Spacer(c)
 			toggleLabel := "View Rendered"
 			if a.SummaryIsMd {
-				toggleLabel = "Edit Raw Code"
+				toggleLabel = "Edit Raw"
 			}
 			if ui.Button(c, toggleLabel).Clicked() {
 				a.SummaryIsMd = !a.SummaryIsMd
@@ -397,9 +359,7 @@ func (a *App) renderSummaryPane(c *ui.Context) {
 		})
 
 		if current == nil {
-			ui.Column(c).Grow(1).Center().Children(func() {
-				ui.Text(c, "No article selected").TextColor(a.Theme.TextMuted)
-			})
+			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
 			return
 		}
 
@@ -417,14 +377,14 @@ func (a *App) renderSummaryPane(c *ui.Context) {
 
 func (a *App) renderExportModal(c *ui.Context) {
 	ui.Modal(c, &a.ShowExportModal, func() {
-		ui.Column(c).Width(400).Padding(16).Gap(12).Background(a.Theme.PanelBg).Children(func() {
+		ui.Column(c).Width(420).Padding(18).Gap(12).Background(a.Theme.PanelBg).Justify(ui.Start).Children(func() {
 			ui.Text(c, "Export Weekly Rollup").FontSize(16).Bold().TextColor(a.Theme.Text)
 
 			ui.Text(c, "Select Export Date:").FontSize(12).TextColor(a.Theme.TextMuted)
 			ui.Calendar(c, &a.SelectedDate)
 
 			exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-			ui.Text(c, "File: "+exportName).FontSize(13).Bold().TextColor(a.Theme.Accent)
+			ui.Text(c, "Output: Documents/"+exportName).FontSize(13).Bold().TextColor(a.Theme.Accent)
 
 			ui.Row(c).Gap(8).Children(func() {
 				if ui.PrimaryButton(c, "Confirm & Export").Clicked() {

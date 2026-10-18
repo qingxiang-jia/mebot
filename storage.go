@@ -27,7 +27,6 @@ func ProjectFilePath(project string) string {
 	return filepath.Join(StateDir(), fmt.Sprintf("%s.md", project))
 }
 
-// DiscoverProjects scans ~/.local/state/mebot for existing projects
 func DiscoverProjects() []string {
 	dir := StateDir()
 	entries, err := os.ReadDir(dir)
@@ -65,6 +64,10 @@ func SerializeToMarkdown(articles []*Article) string {
 }
 
 func ParseMarkdownRollup(content string) ([]*Article, error) {
+	// Strip UTF-8 BOM and normalize Windows CR+LF to LF
+	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+
 	scanner := bufio.NewScanner(strings.NewReader(content))
 
 	type sectionType int
@@ -88,8 +91,10 @@ func ParseMarkdownRollup(content string) ([]*Article, error) {
 		}
 		body := strings.TrimSpace(currentBody.String())
 		if currentSection == inFullText {
+			if _, exists := fullTexts[currentTitle]; !exists {
+				titleOrder = append(titleOrder, currentTitle)
+			}
 			fullTexts[currentTitle] = body
-			titleOrder = append(titleOrder, currentTitle)
 		} else if currentSection == inSummary {
 			summaries[currentTitle] = body
 		}
@@ -100,12 +105,14 @@ func ParseMarkdownRollup(content string) ([]*Article, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
 
-		if trimmed == "# Full Text" {
+		// Flexible header checks
+		if lower == "# full text" || lower == "# full text:" || lower == "# full texts" {
 			flush()
 			currentSection = inFullText
 			continue
-		} else if trimmed == "# Summary" {
+		} else if lower == "# summary" || lower == "# summary:" || lower == "# summaries" {
 			flush()
 			currentSection = inSummary
 			continue
@@ -122,6 +129,26 @@ func ParseMarkdownRollup(content string) ([]*Article, error) {
 		}
 	}
 	flush()
+
+	// Fallback: If it's a single article markdown without rollup headers
+	if len(titleOrder) == 0 {
+		trimmedContent := strings.TrimSpace(content)
+		if trimmedContent != "" {
+			lines := strings.SplitN(trimmedContent, "\n", 2)
+			title := strings.TrimSpace(strings.TrimPrefix(lines[0], "# "))
+			body := ""
+			if len(lines) > 1 {
+				body = strings.TrimSpace(lines[1])
+			}
+			return []*Article{{
+				Title:    title,
+				FullText: body,
+				Summary:  "",
+				Selected: false,
+			}}, nil
+		}
+		return nil, fmt.Errorf("markdown file is empty")
+	}
 
 	var articles []*Article
 	for _, title := range titleOrder {

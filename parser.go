@@ -40,7 +40,6 @@ func ExtractArticleFromHTML(filePath string) (*Article, error) {
 	}, nil
 }
 
-// GetLinuxSystemFonts queries fontconfig for installed fonts
 func GetLinuxSystemFonts() []string {
 	cmd := exec.Command("fc-list", ":", "family")
 	out, err := cmd.Output()
@@ -67,40 +66,51 @@ func GetLinuxSystemFonts() []string {
 }
 
 // PickFiles opens a native Linux file picker (zenity or kdialog)
-func PickFiles(title string, multiple bool, filter string) ([]string, error) {
+func PickFiles(title string, multiple bool, patterns ...string) ([]string, error) {
+	glob := strings.Join(patterns, " ")
+	if glob == "" {
+		glob = "*"
+	}
+
+	// 1. Try zenity (standard on Arch / CachyOS)
 	if _, err := exec.LookPath("zenity"); err == nil {
 		args := []string{"--file-selection", "--title=" + title}
 		if multiple {
 			args = append(args, "--multiple", "--separator=|")
 		}
-		if filter != "" {
-			args = append(args, "--file-filter="+filter)
-		}
+		args = append(args, fmt.Sprintf("--file-filter=%s", glob))
 		cmd := exec.Command("zenity", args...)
 		out, err := cmd.Output()
-		if err != nil {
-			return nil, err
+		if err == nil {
+			raw := strings.TrimSpace(string(out))
+			if raw == "" {
+				return nil, nil
+			}
+			return strings.Split(raw, "|"), nil
 		}
-		raw := strings.TrimSpace(string(out))
-		if raw == "" {
-			return nil, nil
-		}
-		return strings.Split(raw, "|"), nil
 	}
 
+	// 2. Try kdialog (KDE)
 	if _, err := exec.LookPath("kdialog"); err == nil {
-		args := []string{"--getopenfilename", "."}
+		var args []string
 		if multiple {
-			args = []string{"--getopenfilename", "--multiple", "--separate-output", "."}
+			args = []string{"--getopenfilename", "--multiple", "--separate-output", ".", glob}
+		} else {
+			args = []string{"--getopenfilename", ".", glob}
 		}
 		cmd := exec.Command("kdialog", args...)
 		out, err := cmd.Output()
-		if err != nil {
-			return nil, err
+		if err == nil {
+			var files []string
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					files = append(files, line)
+				}
+			}
+			return files, nil
 		}
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		return lines, nil
 	}
 
-	return nil, fmt.Errorf("no native file dialog found; please install zenity or kdialog")
+	return nil, fmt.Errorf("no native file picker found (please install zenity or kdialog)")
 }
