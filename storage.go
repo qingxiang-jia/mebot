@@ -16,7 +16,6 @@ type Article struct {
 	Selected bool
 }
 
-// StateDir returns ~/.local/state/mebot
 func StateDir() string {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".local", "state", "mebot")
@@ -28,17 +27,31 @@ func ProjectFilePath(project string) string {
 	return filepath.Join(StateDir(), fmt.Sprintf("%s.md", project))
 }
 
-// SerializeToMarkdown formats articles into the # Full Text and # Summary format
+// DiscoverProjects scans ~/.local/state/mebot for existing projects
+func DiscoverProjects() []string {
+	dir := StateDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{}
+	}
+	var projects []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+			name := strings.TrimSuffix(entry.Name(), ".md")
+			projects = append(projects, name)
+		}
+	}
+	return projects
+}
+
 func SerializeToMarkdown(articles []*Article) string {
 	var sb strings.Builder
 
-	// 1. Full Text Section
 	sb.WriteString("# Full Text\n\n")
 	for _, art := range articles {
 		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", strings.TrimSpace(art.Title), strings.TrimSpace(art.FullText)))
 	}
 
-	// 2. Summary Section
 	sb.WriteString("# Summary\n\n")
 	for _, art := range articles {
 		summary := strings.TrimSpace(art.Summary)
@@ -51,7 +64,6 @@ func SerializeToMarkdown(articles []*Article) string {
 	return sb.String()
 }
 
-// ParseMarkdownRollup parses a markdown file with # Full Text and # Summary sections
 func ParseMarkdownRollup(content string) ([]*Article, error) {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 
@@ -125,6 +137,9 @@ func ParseMarkdownRollup(content string) ([]*Article, error) {
 }
 
 func SaveProjectState(project string, articles []*Article) error {
+	if project == "" {
+		return nil
+	}
 	md := SerializeToMarkdown(articles)
 	return os.WriteFile(ProjectFilePath(project), []byte(md), 0644)
 }
