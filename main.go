@@ -622,8 +622,11 @@ func (a *App) View(c *ui.Context) {
 	}
 
 	ui.Column(c).Fill().Background(a.Theme.WindowBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		// 1. macOS Style Toolbar with Font Selectors
+		// 1. macOS Style Toolbar
 		a.renderToolbar(c)
+
+		// Thin 1px separator line matching the split view border
+		ui.Row(c).Height(1).FillWidth().Background(a.Theme.Border)
 
 		// 2. Resizable Split Panes (Sidebar | Full Text | Summary)
 		ui.Split(c, &a.SidebarWidth, func() {
@@ -648,6 +651,9 @@ func (a *App) View(c *ui.Context) {
 
 func (a *App) renderToolbar(c *ui.Context) {
 	ui.Toolbar(c, func() {
+		// ==========================================
+		// GROUP 1: Projects (Switch, Add, Rename, Delete)
+		// ==========================================
 		if len(a.Projects) > 1 {
 			prevIdx := a.ActiveProjectIdx
 			ui.Segmented(c, &a.ActiveProjectIdx, a.Projects...).Label("Projects")
@@ -655,61 +661,106 @@ func (a *App) renderToolbar(c *ui.Context) {
 				a.SwitchProject(a.Projects[a.ActiveProjectIdx])
 			}
 		} else if len(a.Projects) == 1 {
-			ui.Button(c, a.Projects[0])
+			ui.Button(c, a.Projects[0]).Border(1, a.Theme.Border).Radius(6)
 		}
 
-		// New Project
-		if ui.Button(c, "").Tooltip("New Project").Children(func() {
-			ui.Icon(c, IconAdd).Size(14, 14)
-		}).Clicked() {
+		if ui.Button(c, "").
+			Tooltip("New Project").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconAdd).Size(14, 14)
+				ui.Text(c, "New").SingleLine()
+			}).Clicked() {
 			a.ShowNewProjectModal = true
 		}
 
 		if len(a.Projects) > 0 {
-			// Rename Active Project
-			if ui.Button(c, "").Tooltip("Rename Current Project").Children(func() {
-				ui.Icon(c, IconEdit).Size(14, 14)
-			}).Clicked() {
+			if ui.Button(c, "").
+				Tooltip("Rename Current Project").
+				Border(1, a.Theme.Border).
+				Radius(6).
+				Gap(6).
+				Children(func() {
+					ui.Icon(c, IconEdit).Size(14, 14)
+					ui.Text(c, "Rename").SingleLine()
+				}).Clicked() {
 				a.RenameProjectName = a.ActiveProject
 				a.ShowRenameProjectModal = true
 			}
 
-			// Delete Active Project
-			if ui.Button(c, "").Tooltip("Delete Current Project").Children(func() {
-				ui.Icon(c, IconTrash).Size(14, 14)
-			}).Clicked() {
+			if ui.Button(c, "").
+				Tooltip("Delete Current Project").
+				Border(1, a.Theme.Border).
+				Radius(6).
+				Gap(6).
+				Children(func() {
+					ui.Icon(c, IconTrash).Size(14, 14)
+					ui.Text(c, "Delete").SingleLine()
+				}).Clicked() {
 				a.ShowDeleteProjectConfirm = true
 			}
 		}
 
 		ui.Divider(c)
 
-		// File Actions
-		if ui.Button(c, "").Tooltip("Import HTML Article(s)").Children(func() {
-			ui.Icon(c, IconImport).Size(14, 14)
-		}).Clicked() {
+		// ==========================================
+		// GROUP 2: Article Actions (Import, Match, Export)
+		// ==========================================
+		if ui.Button(c, "").
+			Tooltip("Import HTML Article(s)").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconImport).Size(14, 14)
+				ui.Text(c, "Import HTML").SingleLine()
+			}).Clicked() {
 			a.ImportHTMLFiles()
 		}
-		if ui.Button(c, "").Tooltip("Import Markdown Rollup").Children(func() {
-			ui.Icon(c, IconDocument).Size(14, 14)
-		}).Clicked() {
+
+		if ui.Button(c, "").
+			Tooltip("Import Markdown Rollup").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconDocument).Size(14, 14)
+				ui.Text(c, "Import MD").SingleLine()
+			}).Clicked() {
 			a.ImportMarkdownFile()
 		}
-		// Batch AI Summary Matcher
-		if ui.Button(c, "").Tooltip("Match Pasted Summaries by Title").Children(func() {
-			ui.Icon(c, IconPaste).Size(14, 14)
-		}).Clicked() {
+
+		if ui.Button(c, "").
+			Tooltip("Match Pasted Summaries by Title").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconPaste).Size(14, 14)
+				ui.Text(c, "Match").SingleLine()
+			}).Clicked() {
 			a.OpenBatchSummaryModal()
 		}
-		if ui.PrimaryButton(c, "").Tooltip("Export to Documents").Children(func() {
-			ui.Icon(c, IconExport).Size(14, 14)
-		}).Clicked() {
+
+		if ui.Button(c, "").
+			Tooltip("Export Weekly Rollup").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconExport).Size(14, 14)
+				ui.Text(c, "Export").SingleLine()
+			}).Clicked() {
 			a.ShowExportModal = true
 		}
 
 		ui.Spacer(c)
 
-		// Auto-save Status
+		// ==========================================
+		// Auto-save Status Indicator
+		// ==========================================
 		if a.IsDirty {
 			ui.Text(c, "Saving...").FontSize(11).TextColor(a.Theme.Accent)
 		} else if a.LastSavedAt != "" {
@@ -718,11 +769,12 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// Font selection using ui.Combobox (scrollable & searchable)
+		// ==========================================
+		// GROUP 3: Typography & Appearance
+		// ==========================================
 		ui.Text(c, "Font:").FontSize(11).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
 			prevFont := a.SelectedFont
-			// .Width(160) keeps the toolbar compact and prevents layout shifting
 			ui.Combobox(c, &a.SelectedFont, a.AvailableFonts).Width(160)
 			if a.SelectedFont != prevFont {
 				a.Settings.FontFamily = a.SelectedFont
@@ -730,7 +782,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 			}
 		}
 
-		// Font size selector
 		ui.Text(c, "Size:").FontSize(11).TextColor(a.Theme.TextMuted)
 		prevSize := a.SelectedFontSize
 		ui.Select(c, &a.SelectedFontSize, a.FontSizeOptions).Width(60)
@@ -743,14 +794,22 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		// Theme Toggle (Sun / Moon)
 		themeIcon := IconSun
+		themeText := "Light"
 		themeTip := "Switch to Light Mode"
 		if !a.IsDarkMode {
 			themeIcon = IconMoon
+			themeText = "Dark"
 			themeTip = "Switch to Dark Mode"
 		}
-		if ui.Button(c, "").Tooltip(themeTip).Children(func() {
-			ui.Icon(c, themeIcon).Size(14, 14)
-		}).Clicked() {
+		if ui.Button(c, "").
+			Tooltip(themeTip).
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, themeIcon).Size(14, 14)
+				ui.Text(c, themeText).SingleLine()
+			}).Clicked() {
 			a.ToggleTheme()
 		}
 	}).Background(a.Theme.ToolbarBg).Label("Mebot Toolbar")
