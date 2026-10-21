@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -73,6 +74,8 @@ type App struct {
 
 	ShowRenameProjectModal bool
 	RenameProjectName      string
+
+	ExportDirectory string
 }
 
 func NewApp() *App {
@@ -163,6 +166,9 @@ func NewApp() *App {
 	if initialProject != "" {
 		app.SwitchProject(initialProject)
 	}
+
+	home, _ := os.UserHomeDir()
+	app.ExportDirectory = filepath.Join(home, "Documents")
 
 	return app
 }
@@ -561,49 +567,109 @@ func (a *App) ToggleTheme() {
 	}
 }
 
-func (a *App) PerformExport() {
-	if len(a.Articles) == 0 || a.ActiveProject == "" {
+func (a *App) BrowseExportDirectory() {
+	startDir := a.ExportDirectory
+	if startDir == "" {
+		home, _ := os.UserHomeDir()
+		startDir = filepath.Join(home, "Documents")
+	}
+
+	// 1. Native KDE Plasma folder picker
+	if kdialogPath, err := exec.LookPath("kdialog"); err == nil {
+		cmd := exec.Command(kdialogPath, "--title", "Select Export Directory", "--getexistingdirectory", startDir)
+		out, err := cmd.Output()
+		if err == nil {
+			dir := strings.TrimSpace(string(out))
+			dir = strings.TrimPrefix(dir, "file://") // Strip KDE URL prefix if present
+			if dir != "" {
+				a.ExportDirectory = dir
+				return
+			}
+		}
+	}
+
+	// 2. Zenity fallback
+	if zenityPath, err := exec.LookPath("zenity"); err == nil {
+		cmd := exec.Command(zenityPath, "--file-selection", "--directory", "--title=Select Export Directory", "--filename="+startDir)
+		out, err := cmd.Output()
+		if err == nil {
+			dir := strings.TrimSpace(string(out))
+			dir = strings.TrimPrefix(dir, "file://")
+			if dir != "" {
+				a.ExportDirectory = dir
+				return
+			}
+		}
+	}
+}
+
+func (a *App) PerformExportTo(outPath string) {
+	if a.ActiveProject == "" || strings.TrimSpace(outPath) == "" {
 		a.ShowExportModal = false
 		return
 	}
 
+	// 1. Flush any active summary edits (if an article is open)
 	cur := a.CurrentArticle()
 	if cur != nil && a.CodeState != nil && !a.ShowMarkdownRender {
 		cur.Summary = a.CodeState.Buffer.String()
 	}
 
-	fileName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-	home, _ := os.UserHomeDir()
-	outPath := filepath.Join(home, "Documents", fileName)
-
+	// 2. Serialize and write the file (creates template even with 0 articles)
 	md := SerializeToMarkdown(a.Articles)
+	_ = os.MkdirAll(filepath.Dir(outPath), 0755)
 	_ = os.WriteFile(outPath, []byte(md), 0644)
 
-	_ = RemoveProjectState(a.ActiveProject)
-	delete(a.Settings.ProjectStates, a.ActiveProject)
-	_ = a.Settings.Save()
+	// 3. Keep local state up-to-date
+	a.SaveNow()
 
-	a.Articles = []*Article{}
-	a.ActiveIdx = 0
-	a.LastActiveIdx = -1
-	a.ChosenArticles.Clear()
-	a.initCodeBuffer("")
+	// 4. Close modal
+	a.ShowExportModal = false
+}
 
-	var updatedProjects []string
-	for _, p := range a.Projects {
-		if p != a.ActiveProject {
-			updatedProjects = append(updatedProjects, p)
+// PickSaveFile opens a native Linux save dialog (KDE kdialog / Zenity)
+func PickSaveFile(title, defaultFilename string) (string, error) {
+	home, _ := os.UserHomeDir()
+	defaultPath := filepath.Join(home, "Documents", defaultFilename)
+
+	// 1. Native KDE Plasma file dialog (since you are on KDE)
+	if kdialogPath, err := exec.LookPath("kdialog"); err == nil {
+		cmd := exec.Command(kdialogPath, "--title", title, "--getsavefilename", defaultPath, "*.md|Markdown Files (*.md)\n*|All Files (*)")
+		out, err := cmd.Output()
+		if err == nil {
+			selected := strings.TrimSpace(string(out))
+			if selected != "" {
+				if !strings.HasSuffix(strings.ToLower(selected), ".md") {
+					selected += ".md"
+				}
+				return selected, nil
+			}
+			return "", nil // User cancelled
 		}
 	}
-	a.Projects = updatedProjects
-	if len(a.Projects) > 0 {
-		a.SwitchProject(a.Projects[0])
-	} else {
-		a.ActiveProject = ""
-		a.LastSavedAt = ""
+
+	// 2. Zenity fallback
+	if zenityPath, err := exec.LookPath("zenity"); err == nil {
+		cmd := exec.Command(zenityPath, "--file-selection", "--save", "--confirm-overwrite",
+			"--title="+title,
+			"--filename="+defaultPath,
+			"--file-filter=Markdown Files (*.md) | *.md",
+			"--file-filter=All Files | *")
+		out, err := cmd.Output()
+		if err == nil {
+			selected := strings.TrimSpace(string(out))
+			if selected != "" {
+				if !strings.HasSuffix(strings.ToLower(selected), ".md") {
+					selected += ".md"
+				}
+				return selected, nil
+			}
+			return "", nil // User cancelled
+		}
 	}
 
-	a.ShowExportModal = false
+	// 3. Fallback if no GUI dialog utility is available
+	return defaultPath, nil
 }
 
 // ---------------- UI VIEW ----------------
@@ -997,13 +1063,14 @@ func (a *App) renderNewProjectModal(c *ui.Context) {
 func (a *App) renderExportModal(c *ui.Context) {
 	ui.DialogBase(c, &a.ShowExportModal, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		panel.Width(290).
+		panel.Width(360).
 			Padding(18).
 			Gap(12).
 			Background(a.Theme.CardBg).
 			Border(1, a.Theme.Border).
 			Radius(10).
 			Justify(ui.Start).
+			AlignItems(ui.Stretch).
 			Children(func() {
 				ui.Text(c, "Export Weekly Rollup").FontSize(15).Bold().TextColor(a.Theme.Text)
 
@@ -1011,14 +1078,24 @@ func (a *App) renderExportModal(c *ui.Context) {
 				ui.Calendar(c, &a.SelectedDate)
 
 				exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-				ui.Text(c, exportName).FontSize(12).Bold().TextColor(a.Theme.Accent)
+
+				ui.Text(c, "Destination Folder:").FontSize(11).TextColor(a.Theme.TextMuted)
+				ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+					ui.TextInput(c, &a.ExportDirectory).Grow(1)
+					if ui.Button(c, "Browse...").Border(1, a.Theme.Border).Radius(6).Clicked() {
+						a.BrowseExportDirectory()
+					}
+				})
+
+				destPath := filepath.Join(a.ExportDirectory, exportName)
+				ui.Text(c, "Exporting: "+exportName).FontSize(11).Bold().TextColor(a.Theme.Accent)
 
 				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
 					if ui.Button(c, "Cancel").Clicked() {
 						a.ShowExportModal = false
 					}
-					if ui.PrimaryButton(c, "Confirm & Export").Clicked() {
-						a.PerformExport()
+					if ui.PrimaryButton(c, "Export").Clicked() {
+						a.PerformExportTo(destPath)
 					}
 				})
 			})
