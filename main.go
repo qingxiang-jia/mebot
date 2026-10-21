@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +19,7 @@ import (
 )
 
 type App struct {
+	win              *mygo.Window
 	Projects         []string
 	ActiveProjectIdx int
 	ActiveProject    string
@@ -27,27 +28,22 @@ type App struct {
 	ActiveIdx        int
 	LastActiveIdx    int
 
-	// List State with selection pointer bound to ActiveIdx
 	ArticleListState ui.ListState
 	ChosenArticles   ui.Selection[int]
 
-	// Split view pane dimensions (DIPs)
 	SidebarWidth float32
 	ReaderWidth  float32
 
-	// Code Editor State for Summary (ui/editor)
 	CodeState          *editor.State
 	LastBufferText     string
 	ShowMarkdownRender bool
 	mdOpts             markdown.Options
 
-	// Auto-save & Debounce State
 	LastSavedAt   string
 	IsDirty       bool
 	debounceTimer *time.Timer
 	saveMu        sync.Mutex
 
-	// Fonts & Settings
 	Settings         *AppSettings
 	AvailableFonts   []string
 	SelectedFont     string
@@ -58,31 +54,29 @@ type App struct {
 	IsDarkMode   bool
 	SelectedDate time.Time
 
+	// Dialog & Modal State
 	ShowExportModal          bool
+	ExportDirectory          string
 	ShowDeleteProjectConfirm bool
 	ShowDeleteArticleConfirm bool
 	ShowNewProjectModal      bool
+	ShowRenameProjectModal   bool
+	RenameProjectName        string
 
-	// Batch Summary Matching State
+	// Summary Matcher Modal State
 	ShowBatchSummaryModal bool
 	BatchPastedMarkdown   string
-	BatchMatchError       string // Stores error message displayed in modal
-	BatchIncludeExisting  bool   // Checkbox state to allow replacing existing summaries
+	BatchMatchError       string
+	BatchIncludeExisting  bool
 	ParsedSummaryMatches  []ParsedSummaryBlock
 	UnmatchedOptions      []string
-	BatchMatchingStep     int // 0 = Paste input, 1 = Review matches
-
-	ShowRenameProjectModal bool
-	RenameProjectName      string
-
-	ExportDirectory string
+	BatchMatchingStep     int
 }
 
 func NewApp() *App {
 	_ = clipboard.Init()
 
 	settings := LoadSettings()
-
 	if settings.IsDarkMode {
 		mygo.Theme.SetSource(mygo.ThemeDark)
 	} else {
@@ -94,15 +88,12 @@ func NewApp() *App {
 	if initialProject == "" || !contains(existingProjects, initialProject) {
 		if len(existingProjects) > 0 {
 			initialProject = existingProjects[0]
-		} else {
-			initialProject = ""
 		}
 	}
 
 	allFonts := GetLinuxSystemFonts()
 	fonts := FilterCleanReadingFonts(allFonts)
 
-	// Pick default font: settings -> first sans font -> "Sans"
 	defaultFont := settings.FontFamily
 	if defaultFont == "" || !contains(fonts, defaultFont) {
 		defaultFont = "Sans"
@@ -128,14 +119,11 @@ func NewApp() *App {
 
 	app := &App{
 		Projects:                 existingProjects,
-		ActiveProjectIdx:         0,
-		ActiveProject:            "",
 		Articles:                 []*Article{},
 		ActiveIdx:                0,
 		LastActiveIdx:            -1,
 		SidebarWidth:             320,
 		ReaderWidth:              680,
-		ShowMarkdownRender:       false,
 		Settings:                 settings,
 		AvailableFonts:           fonts,
 		SelectedFont:             defaultFont,
@@ -144,14 +132,16 @@ func NewApp() *App {
 		Theme:                    theme,
 		IsDarkMode:               settings.IsDarkMode,
 		SelectedDate:             time.Now(),
+		ExportDirectory:          DefaultExportDir(),
 		ShowExportModal:          false,
 		ShowDeleteProjectConfirm: false,
 		ShowDeleteArticleConfirm: false,
 		ShowNewProjectModal:      false,
+		ShowRenameProjectModal:   false,
+		ShowBatchSummaryModal:    false,
 		mdOpts:                   markdown.Options{},
 	}
 
-	// Bind selection pointer to ActiveIdx so list clicks update the active article
 	app.ArticleListState.Selected = &app.ActiveIdx
 	app.ArticleListState.Selection = &app.ChosenArticles
 	app.ArticleListState.Label = func(i int) string {
@@ -166,9 +156,6 @@ func NewApp() *App {
 	if initialProject != "" {
 		app.SwitchProject(initialProject)
 	}
-
-	home, _ := os.UserHomeDir()
-	app.ExportDirectory = filepath.Join(home, "Documents")
 
 	return app
 }
@@ -204,8 +191,6 @@ func FilterCleanReadingFonts(rawFonts []string) []string {
 	}
 	return rawFonts
 }
-
-// ---------------- STATE & PERSISTENCE ----------------
 
 func (a *App) CurrentFontSize() float32 {
 	sz, err := strconv.Atoi(a.SelectedFontSize)
@@ -254,7 +239,6 @@ func (a *App) SelectArticle(newIdx int) {
 		return
 	}
 
-	// 1. Flush summary of the PREVIOUS article ONLY if it was valid and different
 	if a.LastActiveIdx >= 0 && a.LastActiveIdx < len(a.Articles) && a.LastActiveIdx != newIdx {
 		if a.CodeState != nil && !a.ShowMarkdownRender {
 			a.Articles[a.LastActiveIdx].Summary = a.CodeState.Buffer.String()
@@ -264,11 +248,9 @@ func (a *App) SelectArticle(newIdx int) {
 	a.ActiveIdx = newIdx
 	a.LastActiveIdx = newIdx
 
-	// 2. Fetch target article and safely load its summary without wiping it
 	cur := a.Articles[newIdx]
 	a.initCodeBuffer(cur.Summary)
 
-	// 3. Smart view: Default to Markdown if summary exists, else Code Editor
 	if strings.TrimSpace(cur.Summary) != "" {
 		a.ShowMarkdownRender = true
 	} else {
@@ -393,8 +375,54 @@ func (a *App) CreateProject(name string) {
 	}
 	a.Projects = append(a.Projects, name)
 	a.SwitchProject(name)
+
+	// Immediately save the project file and update settings so DiscoverProjects() finds it on next launch
+	_ = SaveProjectState(name, a.Articles)
+	a.SaveProjectSelection()
+
 	a.NewProjectName = ""
 	a.ShowNewProjectModal = false
+}
+
+func (a *App) RenameActiveProject(newName string) {
+	newName = strings.TrimSpace(newName)
+	if newName == "" || newName == a.ActiveProject {
+		a.ShowRenameProjectModal = false
+		return
+	}
+
+	oldName := a.ActiveProject
+	for _, p := range a.Projects {
+		if p == newName {
+			return
+		}
+	}
+
+	oldPath := ProjectFilePath(oldName)
+	newPath := ProjectFilePath(newName)
+	if _, err := os.Stat(oldPath); err == nil {
+		_ = os.Rename(oldPath, newPath)
+	} else {
+		_ = SaveProjectState(newName, a.Articles)
+	}
+
+	for i, p := range a.Projects {
+		if p == oldName {
+			a.Projects[i] = newName
+			break
+		}
+	}
+
+	if st, ok := a.Settings.ProjectStates[oldName]; ok {
+		a.Settings.ProjectStates[newName] = st
+		delete(a.Settings.ProjectStates, oldName)
+	}
+	a.ActiveProject = newName
+	a.updateActiveProjectIdx()
+	a.Settings.LastProject = newName
+	_ = a.Settings.Save()
+
+	a.ShowRenameProjectModal = false
 }
 
 func (a *App) DeleteActiveProject() {
@@ -499,58 +527,114 @@ func (a *App) CopySelectedContents() {
 	}
 }
 
+// Native Dialogs: run in goroutines, update UI via win.Update()
 func (a *App) ImportHTMLFiles() {
-	files, err := PickFiles("Select HTML Article(s)", true, "*.html", "*.htm")
-	if err != nil || len(files) == 0 {
-		return
-	}
-
-	if a.ActiveProject == "" {
-		base := filepath.Base(files[0])
-		projName := strings.TrimSuffix(base, filepath.Ext(base))
-		a.CreateProject(projName)
-	}
-
-	for _, f := range files {
-		art, err := ExtractArticleFromHTML(f)
-		if err == nil {
-			a.Articles = append(a.Articles, art)
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:   a.win,
+			Title:    "Import HTML Article(s)",
+			Filters:  []mygo.FileFilter{{Name: "HTML Articles", Extensions: []string{"html", "htm"}}},
+			Multiple: true,
+		})
+		if err != nil || len(paths) == 0 {
+			return
 		}
-	}
-	a.SelectArticle(a.ActiveIdx)
-	a.SaveNow()
+
+		var parsed []*Article
+		for _, f := range paths {
+			art, err := ExtractArticleFromHTML(f)
+			if err == nil {
+				parsed = append(parsed, art)
+			}
+		}
+
+		if len(parsed) > 0 {
+			a.win.Update(func() {
+				if a.ActiveProject == "" {
+					base := filepath.Base(paths[0])
+					a.CreateProject(strings.TrimSuffix(base, filepath.Ext(base)))
+				}
+				a.Articles = append(a.Articles, parsed...)
+				a.SelectArticle(a.ActiveIdx)
+				a.SaveNow()
+			})
+			debug.FreeOSMemory()
+		}
+	}()
 }
 
 func (a *App) ImportMarkdownFile() {
-	files, err := PickFiles("Select Markdown Rollup", false, "*.md", "*.markdown")
-	if err != nil || len(files) == 0 {
-		return
-	}
-
-	filePath := files[0]
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return
-	}
-
-	parsed, err := ParseMarkdownRollup(string(data))
-	if err != nil || len(parsed) == 0 {
-		return
-	}
-
-	if a.ActiveProject == "" {
-		base := filepath.Base(filePath)
-		projName := strings.TrimSuffix(base, filepath.Ext(base))
-		parts := strings.SplitN(projName, " ", 2)
-		if len(parts) == 2 && len(parts[0]) == 10 && strings.Count(parts[0], "-") == 2 {
-			projName = parts[1]
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:   a.win,
+			Title:    "Import Markdown Rollup",
+			Filters:  []mygo.FileFilter{{Name: "Markdown Files", Extensions: []string{"md", "markdown"}}},
+			Multiple: false,
+		})
+		if err != nil || len(paths) == 0 {
+			return
 		}
-		a.CreateProject(projName)
+
+		data, err := os.ReadFile(paths[0])
+		if err != nil {
+			return
+		}
+
+		parsed, err := ParseMarkdownRollup(string(data))
+		if err != nil || len(parsed) == 0 {
+			return
+		}
+
+		a.win.Update(func() {
+			if a.ActiveProject == "" {
+				base := filepath.Base(paths[0])
+				projName := strings.TrimSuffix(base, filepath.Ext(base))
+				parts := strings.SplitN(projName, " ", 2)
+				if len(parts) == 2 && len(parts[0]) == 10 && strings.Count(parts[0], "-") == 2 {
+					projName = parts[1]
+				}
+				a.CreateProject(projName)
+			}
+			a.Articles = append(a.Articles, parsed...)
+			a.SelectArticle(a.ActiveIdx)
+			a.SaveNow()
+		})
+		debug.FreeOSMemory()
+	}()
+}
+
+func (a *App) BrowseExportDirectory() {
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:    a.win,
+			Title:     "Select Export Directory",
+			Directory: true,
+		})
+		if err == nil && len(paths) > 0 {
+			a.win.Update(func() {
+				a.ExportDirectory = paths[0]
+			})
+		}
+	}()
+}
+
+func (a *App) PerformExportTo(outPath string) {
+	if a.ActiveProject == "" || strings.TrimSpace(outPath) == "" {
+		a.ShowExportModal = false
+		return
 	}
 
-	a.Articles = append(a.Articles, parsed...)
-	a.SelectArticle(a.ActiveIdx)
+	cur := a.CurrentArticle()
+	if cur != nil && a.CodeState != nil && !a.ShowMarkdownRender {
+		cur.Summary = a.CodeState.Buffer.String()
+	}
+
+	md := SerializeToMarkdown(a.Articles)
+	_ = os.MkdirAll(filepath.Dir(outPath), 0755)
+	_ = os.WriteFile(outPath, []byte(md), 0644)
+
 	a.SaveNow()
+	a.ShowExportModal = false
 }
 
 func (a *App) ToggleTheme() {
@@ -567,134 +651,106 @@ func (a *App) ToggleTheme() {
 	}
 }
 
-func (a *App) BrowseExportDirectory() {
-	startDir := a.ExportDirectory
-	if startDir == "" {
-		home, _ := os.UserHomeDir()
-		startDir = filepath.Join(home, "Documents")
-	}
+// Batch AI Summary Matcher
+func (a *App) OpenBatchSummaryModal() {
+	a.BatchPastedMarkdown = ""
+	a.BatchMatchError = ""
+	a.ParsedSummaryMatches = nil
+	a.UnmatchedOptions = nil
+	a.BatchMatchingStep = 0
 
-	// 1. Native KDE Plasma folder picker
-	if kdialogPath, err := exec.LookPath("kdialog"); err == nil {
-		cmd := exec.Command(kdialogPath, "--title", "Select Export Directory", "--getexistingdirectory", startDir)
-		out, err := cmd.Output()
-		if err == nil {
-			dir := strings.TrimSpace(string(out))
-			dir = strings.TrimPrefix(dir, "file://") // Strip KDE URL prefix if present
-			if dir != "" {
-				a.ExportDirectory = dir
-				return
-			}
+	emptyCount := 0
+	for _, art := range a.Articles {
+		if IsSummaryEmpty(art.Summary) {
+			emptyCount++
 		}
 	}
-
-	// 2. Zenity fallback
-	if zenityPath, err := exec.LookPath("zenity"); err == nil {
-		cmd := exec.Command(zenityPath, "--file-selection", "--directory", "--title=Select Export Directory", "--filename="+startDir)
-		out, err := cmd.Output()
-		if err == nil {
-			dir := strings.TrimSpace(string(out))
-			dir = strings.TrimPrefix(dir, "file://")
-			if dir != "" {
-				a.ExportDirectory = dir
-				return
-			}
-		}
-	}
+	a.BatchIncludeExisting = (emptyCount == 0)
+	a.ShowBatchSummaryModal = true
 }
 
-func (a *App) PerformExportTo(outPath string) {
-	if a.ActiveProject == "" || strings.TrimSpace(outPath) == "" {
-		a.ShowExportModal = false
+func (a *App) AnalyzeBatchMarkdown() {
+	a.BatchMatchError = ""
+
+	if strings.TrimSpace(a.BatchPastedMarkdown) == "" {
+		a.BatchMatchError = "Please paste some markdown summary text first."
 		return
 	}
 
-	// 1. Flush any active summary edits (if an article is open)
-	cur := a.CurrentArticle()
-	if cur != nil && a.CodeState != nil && !a.ShowMarkdownRender {
-		cur.Summary = a.CodeState.Buffer.String()
+	if len(a.Articles) == 0 {
+		a.BatchMatchError = "The active project has no articles to match against."
+		return
 	}
 
-	// 2. Serialize and write the file (creates template even with 0 articles)
-	md := SerializeToMarkdown(a.Articles)
-	_ = os.MkdirAll(filepath.Dir(outPath), 0755)
-	_ = os.WriteFile(outPath, []byte(md), 0644)
+	emptyCount := 0
+	for _, art := range a.Articles {
+		if IsSummaryEmpty(art.Summary) {
+			emptyCount++
+		}
+	}
 
-	// 3. Keep local state up-to-date
-	a.SaveNow()
+	if emptyCount == 0 {
+		a.BatchIncludeExisting = true
+	}
 
-	// 4. Close modal
-	a.ShowExportModal = false
+	blocks := ParsePastedSummaries(a.BatchPastedMarkdown)
+	if len(blocks) == 0 {
+		a.BatchMatchError = "Could not parse any summaries from the text. Make sure sections have titles."
+		return
+	}
+
+	matched, options := MatchSummariesToArticles(blocks, a.Articles, a.BatchIncludeExisting)
+	a.ParsedSummaryMatches = matched
+	a.UnmatchedOptions = options
+	a.BatchMatchingStep = 1
 }
 
-// PickSaveFile opens a native Linux save dialog (KDE kdialog / Zenity)
-func PickSaveFile(title, defaultFilename string) (string, error) {
-	home, _ := os.UserHomeDir()
-	defaultPath := filepath.Join(home, "Documents", defaultFilename)
+func (a *App) ApplyBatchMatches() {
+	articleMap := make(map[string]*Article)
+	for _, art := range a.Articles {
+		articleMap[art.Title] = art
+	}
 
-	// 1. Native KDE Plasma file dialog (since you are on KDE)
-	if kdialogPath, err := exec.LookPath("kdialog"); err == nil {
-		cmd := exec.Command(kdialogPath, "--title", title, "--getsavefilename", defaultPath, "*.md|Markdown Files (*.md)\n*|All Files (*)")
-		out, err := cmd.Output()
-		if err == nil {
-			selected := strings.TrimSpace(string(out))
-			if selected != "" {
-				if !strings.HasSuffix(strings.ToLower(selected), ".md") {
-					selected += ".md"
-				}
-				return selected, nil
+	for _, block := range a.ParsedSummaryMatches {
+		if block.SelectedOption != OptionDoNotMatch {
+			if art, ok := articleMap[block.SelectedOption]; ok {
+				art.Summary = block.Body
 			}
-			return "", nil // User cancelled
 		}
 	}
 
-	// 2. Zenity fallback
-	if zenityPath, err := exec.LookPath("zenity"); err == nil {
-		cmd := exec.Command(zenityPath, "--file-selection", "--save", "--confirm-overwrite",
-			"--title="+title,
-			"--filename="+defaultPath,
-			"--file-filter=Markdown Files (*.md) | *.md",
-			"--file-filter=All Files | *")
-		out, err := cmd.Output()
-		if err == nil {
-			selected := strings.TrimSpace(string(out))
-			if selected != "" {
-				if !strings.HasSuffix(strings.ToLower(selected), ".md") {
-					selected += ".md"
-				}
-				return selected, nil
-			}
-			return "", nil // User cancelled
-		}
+	cur := a.CurrentArticle()
+	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
+		a.initCodeBuffer(cur.Summary)
+		a.ShowMarkdownRender = true
 	}
 
-	// 3. Fallback if no GUI dialog utility is available
-	return defaultPath, nil
+	a.SaveNow()
+	a.ShowBatchSummaryModal = false
 }
 
 // ---------------- UI VIEW ----------------
 
 func (a *App) View(c *ui.Context) {
-	// 1. Unify all widget accent & selection colors to macOS list selection blue
+	// Sync accent across all native widgets
 	t := *c.Theme()
 	t.Accent = a.Theme.ActiveRowBg
 	t.AccentText = a.Theme.ActiveRowText
 	c.SetTheme(&t)
 
-	// Sync active article when user clicks or uses keyboard arrows
 	if a.ActiveIdx != a.LastActiveIdx && a.ActiveIdx >= 0 && a.ActiveIdx < len(a.Articles) {
 		a.SelectArticle(a.ActiveIdx)
 		c.Invalidate()
 	}
 
 	ui.Column(c).Fill().Background(a.Theme.WindowBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		// 1. macOS Style Toolbar
+		// 1. Toolbar
 		a.renderToolbar(c)
 
-		// Thin 1px separator line matching the split view border
+		// 1px separator line matching split view border
 		ui.Row(c).Height(1).FillWidth().Background(a.Theme.Border)
 
-		// 2. Resizable Split Panes (Sidebar | Full Text | Summary)
+		// 2. Resizable Split Panes
 		ui.Split(c, &a.SidebarWidth, func() {
 			a.renderArticleListColumn(c)
 		}, func() {
@@ -705,24 +761,17 @@ func (a *App) View(c *ui.Context) {
 			}).Fill()
 		}).Grow(1)
 
-		// 3. Modals
-		a.renderExportModal(c)
-		a.renderDeleteProjectModal(c)
-		a.renderDeleteArticleModal(c)
-		a.renderNewProjectModal(c)
-		a.renderRenameProjectModal(c)
-		a.renderBatchSummaryModal(c)
+		// 3. Modals & Native Dialogs
+		a.renderModals(c)
 	})
 }
 
 func (a *App) renderToolbar(c *ui.Context) {
 	ui.Toolbar(c, func() {
-		// ==========================================
-		// GROUP 1: Projects (Switch, Add, Rename, Delete)
-		// ==========================================
+		// Group 1: Projects
 		if len(a.Projects) > 1 {
 			prevIdx := a.ActiveProjectIdx
-			ui.Segmented(c, &a.ActiveProjectIdx, a.Projects...).Label("Projects")
+			ui.Segmented(c.Key("projectSegment"), &a.ActiveProjectIdx, a.Projects...).Label("Projects")
 			if a.ActiveProjectIdx != prevIdx && a.ActiveProjectIdx < len(a.Projects) {
 				a.SwitchProject(a.Projects[a.ActiveProjectIdx])
 			}
@@ -771,9 +820,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// ==========================================
-		// GROUP 2: Article Actions (Import, Match, Export)
-		// ==========================================
+		// Group 2: Article Actions
 		if ui.Button(c, "").
 			Tooltip("Import HTML Article(s)").
 			Border(1, a.Theme.Border).
@@ -824,9 +871,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Spacer(c)
 
-		// ==========================================
-		// Auto-save Status Indicator
-		// ==========================================
 		if a.IsDirty {
 			ui.Text(c, "Saving...").FontSize(11).TextColor(a.Theme.Accent)
 		} else if a.LastSavedAt != "" {
@@ -835,13 +879,11 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// ==========================================
-		// GROUP 3: Typography & Appearance
-		// ==========================================
+		// Group 3: Typography & Theme
 		ui.Text(c, "Font:").FontSize(11).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
 			prevFont := a.SelectedFont
-			ui.Combobox(c, &a.SelectedFont, a.AvailableFonts).Width(160)
+			ui.Combobox(c.Key("fontFamilySelector"), &a.SelectedFont, a.AvailableFonts).Width(160)
 			if a.SelectedFont != prevFont {
 				a.Settings.FontFamily = a.SelectedFont
 				_ = a.Settings.Save()
@@ -850,7 +892,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Text(c, "Size:").FontSize(11).TextColor(a.Theme.TextMuted)
 		prevSize := a.SelectedFontSize
-		ui.Select(c, &a.SelectedFontSize, a.FontSizeOptions).Width(60)
+		ui.Select(c.Key("fontSizeSelector"), &a.SelectedFontSize, a.FontSizeOptions).Width(60)
 		if a.SelectedFontSize != prevSize {
 			a.Settings.FontSize = a.SelectedFontSize
 			_ = a.Settings.Save()
@@ -858,7 +900,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		ui.Divider(c)
 
-		// Theme Toggle (Sun / Moon)
 		themeIcon := IconSun
 		themeText := "Light"
 		themeTip := "Switch to Light Mode"
@@ -881,28 +922,22 @@ func (a *App) renderToolbar(c *ui.Context) {
 	}).Background(a.Theme.ToolbarBg).Label("Mebot Toolbar")
 }
 
-// Column 1: macOS Style Sidebar with Action Buttons at the Top
 func (a *App) renderArticleListColumn(c *ui.Context) {
 	ui.Column(c).Fill().Padding(8).Gap(8).Background(a.Theme.SidebarBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
-			// Delete Selected
-			if ui.Button(c, "").Tooltip("Delete Selected Article(s)").Children(func() {
+			if ui.Button(c, "").Tooltip("Delete Selected Article(s)").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconTrash).Size(14, 14)
 			}).Clicked() {
 				if a.ChosenArticles.Len() > 0 || a.CurrentArticle() != nil {
 					a.ShowDeleteArticleConfirm = true
 				}
 			}
-
-			// Copy Titles
-			if ui.Button(c, "").Tooltip("Copy Selected Titles").Children(func() {
+			if ui.Button(c, "").Tooltip("Copy Selected Titles").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconCopy).Size(14, 14)
 			}).Clicked() {
 				a.CopySelectedTitles()
 			}
-
-			// Copy Content
-			if ui.Button(c, "").Tooltip("Copy Selected Content").Children(func() {
+			if ui.Button(c, "").Tooltip("Copy Selected Content").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconPaste).Size(14, 14)
 			}).Clicked() {
 				a.CopySelectedContents()
@@ -910,8 +945,7 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 
 			ui.Spacer(c)
 
-			// Select All
-			if ui.Button(c, "").Tooltip("Select All").Children(func() {
+			if ui.Button(c, "").Tooltip("Select All").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconSelectAll).Size(14, 14)
 			}).Clicked() {
 				for i := 0; i < len(a.Articles); i++ {
@@ -919,9 +953,7 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 				}
 				a.SaveProjectSelection()
 			}
-
-			// Clear Selection
-			if ui.Button(c, "").Tooltip("Clear Selection").Children(func() {
+			if ui.Button(c, "").Tooltip("Clear Selection").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconSelectNone).Size(14, 14)
 			}).Clicked() {
 				a.ChosenArticles.Clear()
@@ -929,7 +961,6 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 			}
 		})
 
-		// Native ui.List styled with macOS selection pill highlights
 		ui.List(c, &a.ArticleListState, len(a.Articles), func(i int) {
 			art := a.Articles[i]
 			isCurrent := (i == a.ActiveIdx)
@@ -959,7 +990,6 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 	})
 }
 
-// Column 2: Full Text Area (macOS Crisp Reading Canvas)
 func (a *App) renderFullTextColumn(c *ui.Context) {
 	current := a.CurrentArticle()
 	ui.Column(c).Fill().Padding(20).Gap(12).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
@@ -985,7 +1015,6 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 	})
 }
 
-// Column 3: Summary Area with Code Editor (SoftWrap) & Markdown Switch
 func (a *App) renderSummaryColumn(c *ui.Context) {
 	current := a.CurrentArticle()
 	ui.Column(c).Fill().Padding(16).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
@@ -993,7 +1022,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			ui.Text(c, "SUMMARY").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
 			ui.Spacer(c)
 
-			ui.Switch(c, &a.ShowMarkdownRender).Tooltip("Toggle Markdown Preview")
+			ui.Switch(c.Key("summaryPreviewSwitch"), &a.ShowMarkdownRender).Tooltip("Toggle Markdown Preview")
 			ui.Text(c, "Preview").FontSize(11).TextColor(a.Theme.TextMuted)
 		})
 
@@ -1002,7 +1031,6 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			return
 		}
 
-		// 1. Apply font selection and font size to Markdown preview
 		if a.mdOpts.Theme == nil {
 			a.mdOpts.Theme = &markdown.Theme{}
 		}
@@ -1015,430 +1043,219 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			})
 		} else {
 			if a.CodeState != nil {
-				// 2. Apply font size to the Code Editor content
-				a.CodeState.Font = ui.Font{
-					Size: a.CurrentFontSize(),
-				}
+				a.CodeState.Font = ui.Font{Size: a.CurrentFontSize()}
 				a.CodeState.Theme = editor.DefaultTheme(c.Theme())
 
 				editor.View(c, a.CodeState).Grow(1).FillWidth()
 
-				latestText := a.CodeState.Buffer.String()
-				if latestText != a.LastBufferText {
-					a.LastBufferText = latestText
-					current.Summary = latestText
-					a.TriggerDebouncedSave()
+				if a.CodeState.Buffer.Modified() {
+					latestText := a.CodeState.Buffer.String()
+					if latestText != a.LastBufferText {
+						a.LastBufferText = latestText
+						current.Summary = latestText
+						a.TriggerDebouncedSave()
+					}
 				}
 			}
 		}
 	})
 }
 
-func (a *App) renderNewProjectModal(c *ui.Context) {
-	ui.DialogBase(c, &a.ShowNewProjectModal, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		panel.Width(340).
-			Padding(20).
-			Gap(14).
-			Background(a.Theme.CardBg).
-			Border(1, a.Theme.Border).
-			Radius(10).
-			Justify(ui.Start).
-			Children(func() {
-				ui.Text(c, "New Project").FontSize(15).Bold().TextColor(a.Theme.Text)
-				ui.TextInput(c, &a.NewProjectName).Placeholder("Project name...").AutoFocus()
+// Native Modals using ui.AlertDialog and ui.Modal
+func (a *App) renderModals(c *ui.Context) {
+	// 1. Delete Project Alert Dialog
+	if a.ShowDeleteProjectConfirm {
+		msg := fmt.Sprintf("Are you sure you want to delete '%s' and all its articles?", a.ActiveProject)
+		switch ui.AlertDialog(c, &a.ShowDeleteProjectConfirm, "Delete Project", msg, "Cancel", "Delete") {
+		case 1:
+			a.DeleteActiveProject()
+		}
+	}
 
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowNewProjectModal = false
-					}
-					if ui.PrimaryButton(c, "Create").Clicked() {
-						a.CreateProject(a.NewProjectName)
-					}
-				})
-			})
-	})
-}
-
-func (a *App) renderExportModal(c *ui.Context) {
-	ui.DialogBase(c, &a.ShowExportModal, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		panel.Width(360).
-			Padding(18).
-			Gap(12).
-			Background(a.Theme.CardBg).
-			Border(1, a.Theme.Border).
-			Radius(10).
-			Justify(ui.Start).
-			AlignItems(ui.Stretch).
-			Children(func() {
-				ui.Text(c, "Export Weekly Rollup").FontSize(15).Bold().TextColor(a.Theme.Text)
-
-				ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
-				ui.Calendar(c, &a.SelectedDate)
-
-				exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-
-				ui.Text(c, "Destination Folder:").FontSize(11).TextColor(a.Theme.TextMuted)
-				ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
-					ui.TextInput(c, &a.ExportDirectory).Grow(1)
-					if ui.Button(c, "Browse...").Border(1, a.Theme.Border).Radius(6).Clicked() {
-						a.BrowseExportDirectory()
-					}
-				})
-
-				destPath := filepath.Join(a.ExportDirectory, exportName)
-				ui.Text(c, "Exporting: "+exportName).FontSize(11).Bold().TextColor(a.Theme.Accent)
-
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowExportModal = false
-					}
-					if ui.PrimaryButton(c, "Export").Clicked() {
-						a.PerformExportTo(destPath)
-					}
-				})
-			})
-	})
-}
-
-func (a *App) renderDeleteProjectModal(c *ui.Context) {
-	ui.DialogBase(c, &a.ShowDeleteProjectConfirm, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		panel.Width(340).
-			Padding(20).
-			Gap(14).
-			Background(a.Theme.CardBg).
-			Border(1, a.Theme.Border).
-			Radius(10).
-			Justify(ui.Start).
-			Children(func() {
-				ui.Text(c, "Delete Project").FontSize(15).Bold().TextColor(a.Theme.Accent)
-				ui.Text(c, fmt.Sprintf("Are you sure you want to delete '%s' and all its articles?", a.ActiveProject)).
-					FontSize(13).TextColor(a.Theme.Text)
-
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowDeleteProjectConfirm = false
-					}
-					if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
-						a.DeleteActiveProject()
-					}
-				})
-			})
-	})
-}
-
-func (a *App) renderDeleteArticleModal(c *ui.Context) {
-	ui.DialogBase(c, &a.ShowDeleteArticleConfirm, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-
+	// 2. Delete Article Alert Dialog
+	if a.ShowDeleteArticleConfirm {
 		count := a.ChosenArticles.Len()
 		msg := "Are you sure you want to delete the selected article?"
 		if count > 1 {
 			msg = fmt.Sprintf("Are you sure you want to delete all %d selected articles?", count)
-		} else if a.CurrentArticle() != nil {
-			msg = fmt.Sprintf("Are you sure you want to delete '%s'?", a.CurrentArticle().Title)
+		} else if cur := a.CurrentArticle(); cur != nil {
+			msg = fmt.Sprintf("Are you sure you want to delete '%s'?", cur.Title)
 		}
 
-		panel.Width(340).
-			Padding(20).
-			Gap(14).
-			Background(a.Theme.CardBg).
-			Border(1, a.Theme.Border).
-			Radius(10).
-			Justify(ui.Start).
-			Children(func() {
-				ui.Text(c, "Delete Article").FontSize(15).Bold().TextColor(a.Theme.Accent)
-				ui.Text(c, msg).FontSize(13).TextColor(a.Theme.Text)
+		switch ui.AlertDialog(c, &a.ShowDeleteArticleConfirm, "Delete Article", msg, "Cancel", "Delete") {
+		case 1:
+			a.ConfirmDeleteChosenArticles()
+		}
+	}
 
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowDeleteArticleConfirm = false
-					}
-					if ui.PrimaryButton(c, "Yes, Delete").Clicked() {
-						a.ConfirmDeleteChosenArticles()
-					}
-				})
-			})
+	// 3. New Project Modal
+	ui.Modal(c, &a.ShowNewProjectModal, func() {
+		ui.Text(c, "New Project").FontSize(16).Bold().TextColor(a.Theme.Text)
+		if ui.TextInput(c.Key("newProjInput"), &a.NewProjectName).AutoFocus().Placeholder("Project name...").Submitted() {
+			a.CreateProject(a.NewProjectName)
+		}
+		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			if ui.Button(c, "Cancel").Clicked() {
+				a.ShowNewProjectModal = false
+			}
+			if ui.PrimaryButton(c, "Create").Clicked() {
+				a.CreateProject(a.NewProjectName)
+			}
+		})
 	})
-}
 
-func (a *App) OpenBatchSummaryModal() {
-	a.BatchPastedMarkdown = ""
-	a.BatchMatchError = ""
-	a.ParsedSummaryMatches = nil
-	a.UnmatchedOptions = nil
-	a.BatchMatchingStep = 0
-
-	// Check how many articles have empty summaries
-	emptyCount := 0
-	for _, art := range a.Articles {
-		if IsSummaryEmpty(art.Summary) {
-			emptyCount++
+	// 4. Rename Project Modal
+	ui.Modal(c, &a.ShowRenameProjectModal, func() {
+		ui.Text(c, "Rename Project").FontSize(16).Bold().TextColor(a.Theme.Text)
+		if ui.TextInput(c.Key("renameProjInput"), &a.RenameProjectName).AutoFocus().Placeholder("New project name...").Submitted() {
+			a.RenameActiveProject(a.RenameProjectName)
 		}
-	}
-	// If all articles have summaries, default to including existing so you're not blocked
-	a.BatchIncludeExisting = (emptyCount == 0)
-	a.ShowBatchSummaryModal = true
-}
+		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			if ui.Button(c, "Cancel").Clicked() {
+				a.ShowRenameProjectModal = false
+			}
+			if ui.PrimaryButton(c, "Rename").Clicked() {
+				a.RenameActiveProject(a.RenameProjectName)
+			}
+		})
+	})
 
-func (a *App) AnalyzeBatchMarkdown() {
-	a.BatchMatchError = ""
+	// 5. Export Modal
+	ui.Modal(c, &a.ShowExportModal, func() {
+		ui.Text(c, "Export Weekly Rollup").FontSize(16).Bold().TextColor(a.Theme.Text)
 
-	if strings.TrimSpace(a.BatchPastedMarkdown) == "" {
-		a.BatchMatchError = "Please paste some markdown summary text first."
-		return
-	}
+		ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
+		ui.Calendar(c, &a.SelectedDate)
 
-	if len(a.Articles) == 0 {
-		a.BatchMatchError = "The active project has no articles to match against."
-		return
-	}
+		exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
 
-	emptyCount := 0
-	for _, art := range a.Articles {
-		if IsSummaryEmpty(art.Summary) {
-			emptyCount++
-		}
-	}
+		ui.Text(c, "Destination Folder:").FontSize(11).TextColor(a.Theme.TextMuted)
+		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+			ui.TextInput(c.Key("exportDirInput"), &a.ExportDirectory).Grow(1)
+			if ui.Button(c, "Browse...").Border(1, a.Theme.Border).Radius(6).Clicked() {
+				a.BrowseExportDirectory()
+			}
+		})
 
-	// Never block: if there are no empty ones, automatically enable includeExisting
-	if emptyCount == 0 {
-		a.BatchIncludeExisting = true
-	}
+		destPath := filepath.Join(a.ExportDirectory, exportName)
+		ui.Text(c, "File: "+exportName).FontSize(11).Bold().TextColor(a.Theme.Accent)
 
-	blocks := ParsePastedSummaries(a.BatchPastedMarkdown)
-	if len(blocks) == 0 {
-		a.BatchMatchError = "Could not parse any summaries from the text. Make sure sections have titles."
-		return
-	}
+		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			if ui.Button(c, "Cancel").Clicked() {
+				a.ShowExportModal = false
+			}
+			if ui.PrimaryButton(c, "Export").Clicked() {
+				a.PerformExportTo(destPath)
+			}
+		})
+	})
 
-	matched, options := MatchSummariesToArticles(blocks, a.Articles, a.BatchIncludeExisting)
-	a.ParsedSummaryMatches = matched
-	a.UnmatchedOptions = options
-	a.BatchMatchingStep = 1
-}
+	// 6. Batch AI Summary Matcher Modal
+	ui.Modal(c, &a.ShowBatchSummaryModal, func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
+			ui.Spacer(c)
+			if a.BatchMatchingStep == 1 {
+				if ui.Button(c, "Back to Edit").Clicked() {
+					a.BatchMatchingStep = 0
+				}
+			}
+		})
 
-func (a *App) ApplyBatchMatches() {
-	// Map matched summaries to target articles
-	articleMap := make(map[string]*Article)
-	for _, art := range a.Articles {
-		articleMap[art.Title] = art
-	}
-
-	for _, block := range a.ParsedSummaryMatches {
-		if block.SelectedOption != OptionDoNotMatch {
-			if art, ok := articleMap[block.SelectedOption]; ok {
-				art.Summary = block.Body
+		emptyCount := 0
+		for _, art := range a.Articles {
+			if IsSummaryEmpty(art.Summary) {
+				emptyCount++
 			}
 		}
-	}
 
-	// If currently active article was matched, update its editor buffer & markdown view
-	cur := a.CurrentArticle()
-	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
-		a.initCodeBuffer(cur.Summary)
-		a.ShowMarkdownRender = true
-	}
+		if a.BatchMatchingStep == 0 {
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Paste your markdown summaries below:").FontSize(12).TextColor(a.Theme.TextMuted)
+				ui.Spacer(c)
+				ui.Text(c, fmt.Sprintf("Project has %d articles (%d without summary)", len(a.Articles), emptyCount)).
+					FontSize(11).TextColor(a.Theme.Accent)
+			})
 
-	a.SaveNow()
-	a.ShowBatchSummaryModal = false
-}
+			ui.TextArea(c.Key("batchAreaInput"), &a.BatchPastedMarkdown).
+				Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
+				Height(280).
+				Grow(1)
 
-func (a *App) renderBatchSummaryModal(c *ui.Context) {
-	ui.DialogBase(c, &a.ShowBatchSummaryModal, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		panel.Width(680).
-			Height(540).
-			Padding(20).
-			Gap(14).
-			Background(a.Theme.CardBg).
-			Border(1, a.Theme.Border).
-			Radius(12).
-			Justify(ui.Start).
-			AlignItems(ui.Stretch).
-			Children(func() {
-				// Header
-				ui.Row(c).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
-					ui.Spacer(c)
-					if a.BatchMatchingStep == 1 {
-						if ui.Button(c, "Back to Edit").Clicked() {
-							a.BatchMatchingStep = 0
-						}
-					}
-				})
+			ui.Checkbox(c.Key("batchIncludeExistingCheck"), &a.BatchIncludeExisting, "Include articles that already have summaries")
 
-				emptyCount := 0
-				for _, art := range a.Articles {
-					if IsSummaryEmpty(art.Summary) {
-						emptyCount++
-					}
+			if a.BatchMatchError != "" {
+				ui.Text(c, a.BatchMatchError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
+			}
+
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					a.ShowBatchSummaryModal = false
 				}
-
-				if a.BatchMatchingStep == 0 {
-					// Step 1: Input & Options
-					ui.Row(c).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "Paste your markdown summaries below:").FontSize(12).TextColor(a.Theme.TextMuted)
-						ui.Spacer(c)
-						ui.Text(c, fmt.Sprintf("Project has %d articles (%d without summary)", len(a.Articles), emptyCount)).
-							FontSize(11).TextColor(a.Theme.Accent)
-					})
-
-					ui.TextArea(c, &a.BatchPastedMarkdown).
-						Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
-						Grow(1)
-
-					// Allow toggling whether to include/replace articles that already have summaries
-					ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-						ui.Checkbox(c, &a.BatchIncludeExisting, "Include articles that already have summaries")
-					})
-
-					if a.BatchMatchError != "" {
-						ui.Text(c, a.BatchMatchError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-					}
-
-					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-						if ui.Button(c, "Cancel").Clicked() {
-							a.ShowBatchSummaryModal = false
-						}
-						if ui.PrimaryButton(c, "Analyze & Match").Clicked() {
-							a.AnalyzeBatchMarkdown()
-						}
-					})
-				} else {
-					// Step 2: Review & Assign
-					ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
-						FontSize(12).TextColor(a.Theme.TextMuted)
-
-					ui.Scroll(c).Grow(1).Children(func() {
-						ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
-							for i := range a.ParsedSummaryMatches {
-								item := &a.ParsedSummaryMatches[i]
-
-								ui.Column(c).
-									Padding(10).
-									Radius(6).
-									Background(a.Theme.SidebarBg).
-									Border(1, a.Theme.Border).
-									Gap(6).
-									Children(func() {
-										ui.Text(c, "Summary Title: "+item.RawTitle).
-											FontSize(13).Bold().TextColor(a.Theme.Text)
-
-										excerpt := item.Body
-										if len([]rune(excerpt)) > 120 {
-											excerpt = string([]rune(excerpt)[:120]) + "..."
-										}
-										ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
-
-										ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-											ui.Text(c, "Assign to:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-											ui.Select(c, &item.SelectedOption, a.UnmatchedOptions).Width(340)
-										})
-									})
-							}
-						})
-					})
-
-					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-						if ui.Button(c, "Cancel").Clicked() {
-							a.ShowBatchSummaryModal = false
-						}
-						if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
-							a.ApplyBatchMatches()
-						}
-					})
+				if ui.PrimaryButton(c, "Analyze & Match").Clicked() {
+					a.AnalyzeBatchMarkdown()
 				}
 			})
-	})
-}
+		} else {
+			ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
+				FontSize(12).TextColor(a.Theme.TextMuted)
 
-func (a *App) RenameActiveProject(newName string) {
-	newName = strings.TrimSpace(newName)
-	if newName == "" || newName == a.ActiveProject {
-		a.ShowRenameProjectModal = false
-		return
-	}
+			ui.Scroll(c).Grow(1).Children(func() {
+				ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
+					for i := range a.ParsedSummaryMatches {
+						item := &a.ParsedSummaryMatches[i]
 
-	oldName := a.ActiveProject
+						ui.Column(c).
+							Padding(10).
+							Radius(6).
+							Background(a.Theme.SidebarBg).
+							Border(1, a.Theme.Border).
+							Gap(6).
+							Children(func() {
+								ui.Text(c, "Summary Title: "+item.RawTitle).
+									FontSize(13).Bold().TextColor(a.Theme.Text)
 
-	// Prevent duplicate project names
-	for _, p := range a.Projects {
-		if p == newName {
-			return
-		}
-	}
+								excerpt := item.Body
+								if len([]rune(excerpt)) > 120 {
+									excerpt = string([]rune(excerpt)[:120]) + "..."
+								}
+								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
 
-	// 1. Rename the state file on disk
-	oldPath := ProjectFilePath(oldName)
-	newPath := ProjectFilePath(newName)
-	if _, err := os.Stat(oldPath); err == nil {
-		_ = os.Rename(oldPath, newPath)
-	} else {
-		_ = SaveProjectState(newName, a.Articles)
-	}
-
-	// 2. Update project in list
-	for i, p := range a.Projects {
-		if p == oldName {
-			a.Projects[i] = newName
-			break
-		}
-	}
-
-	// 3. Migrate state in settings.json
-	if st, ok := a.Settings.ProjectStates[oldName]; ok {
-		a.Settings.ProjectStates[newName] = st
-		delete(a.Settings.ProjectStates, oldName)
-	}
-	a.ActiveProject = newName
-	a.updateActiveProjectIdx()
-	a.Settings.LastProject = newName
-	_ = a.Settings.Save()
-
-	a.ShowRenameProjectModal = false
-}
-
-func (a *App) renderRenameProjectModal(c *ui.Context) {
-	ui.DialogBase(c, &a.ShowRenameProjectModal, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		panel.Width(340).
-			Padding(20).
-			Gap(14).
-			Background(a.Theme.CardBg).
-			Border(1, a.Theme.Border).
-			Radius(10).
-			Justify(ui.Start).
-			Children(func() {
-				ui.Text(c, "Rename Project").FontSize(15).Bold().TextColor(a.Theme.Text)
-				ui.TextInput(c, &a.RenameProjectName).Placeholder("New project name...").AutoFocus()
-
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-					if ui.Button(c, "Cancel").Clicked() {
-						a.ShowRenameProjectModal = false
-					}
-					if ui.PrimaryButton(c, "Rename").Clicked() {
-						a.RenameActiveProject(a.RenameProjectName)
+								ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+									ui.Text(c, "Assign to:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+									ui.Select(c.Key(fmt.Sprintf("assignSel_%d", i)), &item.SelectedOption, a.UnmatchedOptions).Width(340)
+								})
+							})
 					}
 				})
 			})
+
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					a.ShowBatchSummaryModal = false
+				}
+				if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
+					a.ApplyBatchMatches()
+				}
+			})
+		}
 	})
 }
 
 func main() {
 	os.Setenv("MYGO_GPU", "0")
+	debug.SetGCPercent(40)
 
 	app := NewApp()
 
 	mygo.App.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
+		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:   "Mebot",
 			Width:   1760,
 			Height:  1000,
 			Content: ui.View(app.View),
 		})
+		app.win = win
 	})
 
 	if err := mygo.App.Run(); err != nil {

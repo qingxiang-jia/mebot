@@ -7,10 +7,37 @@ import (
 )
 
 func StateDir() string {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".local", "state", "mebot")
+	var base string
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		base = xdg
+	} else {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".local", "state")
+	}
+	dir := filepath.Join(base, "mebot")
 	_ = os.MkdirAll(dir, 0755)
+
+	// Automatic recovery: rescue any files written to ~/.local/share/mebot
+	home, _ := os.UserHomeDir()
+	shareDir := filepath.Join(home, ".local", "share", "mebot")
+	if entries, err := os.ReadDir(shareDir); err == nil && len(entries) > 0 {
+		for _, e := range entries {
+			src := filepath.Join(shareDir, e.Name())
+			dst := filepath.Join(dir, e.Name())
+			if _, err := os.Stat(dst); os.IsNotExist(err) {
+				_ = os.Rename(src, dst)
+			}
+		}
+	}
+
 	return dir
+}
+
+func DefaultExportDir() string {
+	home, _ := os.UserHomeDir()
+	docs := filepath.Join(home, "Documents")
+	_ = os.MkdirAll(docs, 0755)
+	return docs
 }
 
 func ProjectFilePath(projectName string) string {
