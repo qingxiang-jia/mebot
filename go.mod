@@ -3,14 +3,14 @@ module mebot
 go 1.27.1
 
 require (
-	github.com/egoist/mygo v0.5.5
+	github.com/egoist/mygo v0.6.0
 	github.com/markusmobius/go-trafilatura/v2 v2.2.6
 	golang.design/x/clipboard v0.7.0
 )
 
 require (
 	github.com/andybalholm/cascadia v1.3.5 // indirect
-	github.com/ebitengine/purego v0.11.1 // indirect
+	github.com/ebitengine/purego v0.11.2 // indirect
 	github.com/forPelevin/gomoji v1.3.0 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
