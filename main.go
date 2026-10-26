@@ -513,14 +513,14 @@ func (a *App) CopySelectedContents() {
 		for idx := range a.ChosenArticles.All() {
 			if idx >= 0 && idx < len(a.Articles) {
 				art := a.Articles[idx]
-				sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n---\n\n", art.Title, art.FullText))
+				sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", art.Title, art.FullText))
 				hasAny = true
 			}
 		}
 	}
 	if !hasAny && a.CurrentArticle() != nil {
 		art := a.CurrentArticle()
-		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n---\n\n", art.Title, art.FullText))
+		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", art.Title, art.FullText))
 	}
 	if sb.Len() > 0 {
 		clipboard.Write(clipboard.FmtText, []byte(sb.String()))
