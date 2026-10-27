@@ -6,10 +6,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	trafilatura "github.com/markusmobius/go-trafilatura/v2"
+)
+
+// articlePruneSelector removes page furniture that the extractor otherwise
+// mistakes for article text. AI2HTML is used by many news sites for
+// infographics; its absolutely positioned labels come through as stray
+// paragraphs. Printheadline is the print-edition blurb some sites add.
+const articlePruneSelector = `.ai2html_export, [class*=ai2html], [class*=g-GFX], [class*=g-aiPointText], [class*=Printheadline], [class*=printheadline]`
+
+var (
+	// A leading "ET", "Updated ET" or "Oct. 24, 2026 10:00 am ET" is a
+	// timestamp fragment, not the start of the article.
+	leadingTimestamp = regexp.MustCompile(`(?i)^(?:updated\s+)?(?:[a-z]{3}\.?\s+\d{1,2},\s+\d{4}(?:\s+\d{1,2}:\d{2}\s*[ap]m)?\s+)?(?:et|pt|ct|mt|utc|gmt|bst|cet|cest|ist|jst|aest)$`)
+
+	// Inline stock widgets leave text such as
+	// "NVDA 2.39%increase; up pointing triangle" in the article.
+	inlineTicker = regexp.MustCompile(`\s+[A-Z][A-Z0-9.]{0,9}\s+[+-]?\d+(?:\.\d+)?%(?:increase|decrease);\s*(?:up|down) pointing triangle`)
+
+	copyrightLine = regexp.MustCompile(`(?im)^[ \t]*copyright\b`)
 )
 
 func ExtractArticleFromHTML(filePath string) (*Article, error) {
@@ -21,6 +40,7 @@ func ExtractArticleFromHTML(filePath string) (*Article, error) {
 	result, err := trafilatura.Extract(bytes.NewReader(data), trafilatura.Options{
 		ExcludeComments: true,
 		ExcludeTables:   false,
+		PruneSelector:   articlePruneSelector,
 	})
 	if err != nil {
 		return nil, err
@@ -34,10 +54,37 @@ func ExtractArticleFromHTML(filePath string) (*Article, error) {
 
 	return &Article{
 		Title:    title,
-		FullText: result.ContentText,
+		FullText: cleanExtractedText(result.ContentText),
 		Summary:  "",
 		Selected: false,
 	}, nil
+}
+
+// cleanExtractedText removes timestamps, inline stock-widget text and the
+// trailing copyright/author-bio block that extraction keeps because it is
+// part of the article's container.
+func cleanExtractedText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+
+	lines := strings.Split(text, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	if len(lines) > 0 && leadingTimestamp.MatchString(strings.TrimSpace(lines[0])) {
+		lines = lines[1:]
+	}
+	for i, line := range lines {
+		lines[i] = inlineTicker.ReplaceAllString(line, "")
+	}
+	text = strings.Join(lines, "\n")
+
+	// Copyright notices sit at the end of the article, followed by the
+	// print blurb and author bios. Only cut in the second half so a short
+	// mention of copyright in the body is kept.
+	if loc := copyrightLine.FindStringIndex(text); loc != nil && loc[0] > len(text)/2 {
+		text = text[:loc[0]]
+	}
+	return strings.TrimSpace(text)
 }
 
 func GetLinuxSystemFonts() []string {
