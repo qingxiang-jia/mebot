@@ -551,6 +551,32 @@ func (a *App) CopySelectedContents() {
 	}
 }
 
+func (a *App) CopySelectedSummaries() {
+	var sb strings.Builder
+	hasAny := false
+	if a.ChosenArticles.Len() > 0 {
+		for idx := range a.ChosenArticles.All() {
+			if idx >= 0 && idx < len(a.Articles) {
+				art := a.Articles[idx]
+				if IsSummaryEmpty(art.Summary) {
+					continue
+				}
+				sb.WriteString(fmt.Sprintf("# %s\n\n%s\n\n", art.Title, strings.TrimSpace(art.Summary)))
+				hasAny = true
+			}
+		}
+	}
+	if !hasAny && a.CurrentArticle() != nil {
+		art := a.CurrentArticle()
+		if !IsSummaryEmpty(art.Summary) {
+			sb.WriteString(fmt.Sprintf("# %s\n\n%s\n\n", art.Title, strings.TrimSpace(art.Summary)))
+		}
+	}
+	if sb.Len() > 0 {
+		clipboard.Write(clipboard.FmtText, []byte(sb.String()))
+	}
+}
+
 // Native Dialogs: run in goroutines, update UI via win.Update()
 func (a *App) ImportHTMLFiles() {
 	go func() {
@@ -1184,6 +1210,11 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 				ui.Icon(c, IconPaste).Size(14, 14)
 			}).Clicked() {
 				a.CopySelectedContents()
+			}
+			if ui.Button(c, "").Tooltip("Copy Selected Summaries").Border(1, a.Theme.Border).Radius(6).Children(func() {
+				ui.Icon(c, IconDocument).Size(14, 14)
+			}).Clicked() {
+				a.CopySelectedSummaries()
 			}
 
 			ui.Spacer(c)
