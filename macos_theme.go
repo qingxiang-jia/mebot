@@ -5,7 +5,6 @@ import "github.com/egoist/mygo/ui"
 type MacOSTheme struct {
 	IsDark        bool
 	WindowBg      ui.Color // macOS window chrome
-	ToolbarBg     ui.Color // macOS unified toolbar
 	SidebarBg     ui.Color // macOS source list grouped sidebar
 	CardBg        ui.Color // macOS reading sheet & editor canvas
 	Border        ui.Color // 1px separator border
@@ -21,7 +20,6 @@ func MacOSLightTheme() MacOSTheme {
 	return MacOSTheme{
 		IsDark:        false,
 		WindowBg:      ui.RGB(242, 242, 247), // macOS systemGroupedBackground
-		ToolbarBg:     ui.RGB(246, 246, 246), // macOS unified toolbar background
 		SidebarBg:     ui.RGB(238, 238, 242), // macOS Finder/Notes source list
 		CardBg:        ui.RGB(255, 255, 255), // macOS pure white content sheet
 		Border:        ui.RGB(218, 218, 222), // macOS subtle divider
@@ -38,7 +36,6 @@ func MacOSDarkTheme() MacOSTheme {
 	return MacOSTheme{
 		IsDark:        true,
 		WindowBg:      ui.RGB(28, 28, 30),    // macOS dark systemGroupedBackground
-		ToolbarBg:     ui.RGB(38, 38, 42),    // macOS dark toolbar
 		SidebarBg:     ui.RGB(32, 32, 36),    // macOS dark source list sidebar
 		CardBg:        ui.RGB(24, 24, 26),    // macOS dark canvas
 		Border:        ui.RGB(54, 54, 58),    // macOS dark divider

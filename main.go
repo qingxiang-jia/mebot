@@ -1019,13 +1019,11 @@ func (a *App) renderToolbar(c *ui.Context) {
 				a.SwitchProject(a.Projects[a.ActiveProjectIdx])
 			}
 		} else if len(a.Projects) == 1 {
-			ui.Button(c, a.Projects[0]).Border(1, a.Theme.Border).Radius(6)
+			ui.Text(c, a.Projects[0]).FontSize(13).TextColor(a.Theme.Text)
 		}
 
 		if ui.Button(c, "").
 			Tooltip("New Project").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconAdd).Size(14, 14)
@@ -1037,8 +1035,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 		if len(a.Projects) > 0 {
 			if ui.Button(c, "").
 				Tooltip("Rename Current Project").
-				Border(1, a.Theme.Border).
-				Radius(6).
 				Gap(6).
 				Children(func() {
 					ui.Icon(c, IconEdit).Size(14, 14)
@@ -1050,8 +1046,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 			if ui.Button(c, "").
 				Tooltip("Delete Current Project").
-				Border(1, a.Theme.Border).
-				Radius(6).
 				Gap(6).
 				Children(func() {
 					ui.Icon(c, IconTrash).Size(14, 14)
@@ -1066,8 +1060,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 		// Group 2: Article Actions
 		if ui.Button(c, "").
 			Tooltip("Import HTML Article(s)").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconImport).Size(14, 14)
@@ -1078,8 +1070,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		if ui.Button(c, "").
 			Tooltip("Import Markdown Rollup").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconDocument).Size(14, 14)
@@ -1090,8 +1080,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		if ui.Button(c, "").
 			Tooltip("Match Pasted Summaries by Title").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconPaste).Size(14, 14)
@@ -1102,8 +1090,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		if ui.Button(c, "").
 			Tooltip("Generate Missing Summaries with Gemini").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconSparkle).Size(14, 14)
@@ -1114,8 +1100,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		if ui.Button(c, "").
 			Tooltip("Export Weekly Rollup").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconExport).Size(14, 14)
@@ -1165,8 +1149,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 		}
 		if ui.Button(c, "").
 			Tooltip(themeTip).
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, themeIcon).Size(14, 14)
@@ -1179,8 +1161,6 @@ func (a *App) renderToolbar(c *ui.Context) {
 
 		if ui.Button(c, "").
 			Tooltip("Settings").
-			Border(1, a.Theme.Border).
-			Radius(6).
 			Gap(6).
 			Children(func() {
 				ui.Icon(c, IconSettings).Size(14, 14)
@@ -1188,7 +1168,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			}).Clicked() {
 			a.OpenSettingsModal()
 		}
-	}).Background(a.Theme.ToolbarBg).Label("Mebot Toolbar")
+	}).Label("Mebot Toolbar")
 }
 
 func (a *App) renderArticleListColumn(c *ui.Context) {
