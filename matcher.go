@@ -172,6 +172,31 @@ func TitleSimilarity(s1, s2 string) float64 {
 	return 1.0 - (float64(dist) / float64(maxLen))
 }
 
+// ApplySummaryMatches writes the chosen summary bodies onto their articles.
+// It returns the titles of the articles that were changed.
+func ApplySummaryMatches(matches []ParsedSummaryBlock, articles []*Article) []string {
+	articleMap := make(map[string]*Article)
+	for _, art := range articles {
+		articleMap[art.Title] = art
+	}
+
+	var applied []string
+	appliedSet := make(map[string]bool)
+	for _, block := range matches {
+		if block.SelectedOption == OptionDoNotMatch {
+			continue
+		}
+		if art, ok := articleMap[block.SelectedOption]; ok {
+			art.Summary = block.Body
+			if !appliedSet[art.Title] {
+				appliedSet[art.Title] = true
+				applied = append(applied, art.Title)
+			}
+		}
+	}
+	return applied
+}
+
 // MatchSummariesToArticles matches against empty summaries, or all articles if includeExisting is true
 func MatchSummariesToArticles(summaries []ParsedSummaryBlock, articles []*Article, includeExisting bool) ([]ParsedSummaryBlock, []string) {
 	var candidates []*Article

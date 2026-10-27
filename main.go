@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -71,6 +72,26 @@ type App struct {
 	ParsedSummaryMatches  []ParsedSummaryBlock
 	UnmatchedOptions      []string
 	BatchMatchingStep     int
+
+	// Gemini AI Summary State
+	ShowAISummaryModal bool
+	AISummaryStep      int // 0 = confirm, 1 = running/error, 2 = review
+	AISummaryTargets   []Article
+	AISummaryThinking  string
+	AISummaryOutput    string
+	AISummaryStatus    string
+	AISummaryError     string
+	AISummaryWarning   string
+	AISummaryMatches   []ParsedSummaryBlock
+	AISummaryOptions   []string
+	aiCancel           context.CancelFunc
+	aiRunID            int
+
+	// Settings Modal State
+	ShowSettingsModal   bool
+	SettingsDraftAPIKey string
+	SettingsDraftModel  string
+	SettingsDraftPrompt string
 }
 
 func NewApp() *App {
@@ -139,6 +160,9 @@ func NewApp() *App {
 		ShowNewProjectModal:      false,
 		ShowRenameProjectModal:   false,
 		ShowBatchSummaryModal:    false,
+		ShowAISummaryModal:       false,
+		AISummaryStep:            0,
+		ShowSettingsModal:        false,
 		mdOpts:                   markdown.Options{},
 	}
 
@@ -706,19 +730,15 @@ func (a *App) AnalyzeBatchMarkdown() {
 }
 
 func (a *App) ApplyBatchMatches() {
-	articleMap := make(map[string]*Article)
-	for _, art := range a.Articles {
-		articleMap[art.Title] = art
-	}
+	a.applySummaryMatches(a.ParsedSummaryMatches)
+	a.ShowBatchSummaryModal = false
+}
 
-	for _, block := range a.ParsedSummaryMatches {
-		if block.SelectedOption != OptionDoNotMatch {
-			if art, ok := articleMap[block.SelectedOption]; ok {
-				art.Summary = block.Body
-			}
-		}
-	}
+func (a *App) applySummaryMatches(matches []ParsedSummaryBlock) []string {
+	applied := ApplySummaryMatches(matches, a.Articles)
 
+	// Keep the editor buffer in sync so SaveNow cannot overwrite a freshly
+	// generated summary on the currently selected article.
 	cur := a.CurrentArticle()
 	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
 		a.initCodeBuffer(cur.Summary)
@@ -726,12 +746,209 @@ func (a *App) ApplyBatchMatches() {
 	}
 
 	a.SaveNow()
-	a.ShowBatchSummaryModal = false
+	return applied
+}
+
+// ---------------- Gemini AI Summary ----------------
+
+func (a *App) OpenAISummaryModal() {
+	a.cancelAIRequest()
+	a.AISummaryStep = 0
+	a.AISummaryThinking = ""
+	a.AISummaryOutput = ""
+	a.AISummaryStatus = ""
+	a.AISummaryError = ""
+	a.AISummaryWarning = ""
+	a.AISummaryMatches = nil
+	a.AISummaryOptions = nil
+	a.AISummaryTargets = nil
+
+	for _, art := range a.Articles {
+		if IsSummaryEmpty(art.Summary) {
+			a.AISummaryTargets = append(a.AISummaryTargets, *art)
+		}
+	}
+	a.ShowAISummaryModal = true
+}
+
+func (a *App) geminiAPIKey() string {
+	key := strings.TrimSpace(a.Settings.GeminiAPIKey)
+	if key == "" {
+		key = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	}
+	return key
+}
+
+func (a *App) StartAISummary() {
+	if a.aiCancel != nil {
+		return
+	}
+	if len(a.AISummaryTargets) == 0 {
+		a.AISummaryError = "There are no articles without a summary."
+		return
+	}
+
+	apiKey := a.geminiAPIKey()
+	if apiKey == "" {
+		a.AISummaryError = "Add your Gemini API key in Settings first."
+		return
+	}
+
+	model := strings.TrimSpace(a.Settings.GeminiModel)
+	if model == "" {
+		model = DefaultGeminiModel
+	}
+	prompt := BuildSummaryPrompt(a.Settings.GeminiPrompt, a.AISummaryTargets)
+
+	a.AISummaryStep = 1
+	a.AISummaryError = ""
+	a.AISummaryWarning = ""
+	a.AISummaryThinking = ""
+	a.AISummaryOutput = ""
+	a.AISummaryStatus = "Starting Gemini..."
+	a.AISummaryMatches = nil
+	a.AISummaryOptions = nil
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.aiCancel = cancel
+	a.aiRunID++
+	runID := a.aiRunID
+
+	go func() {
+		var thoughts, answer strings.Builder
+		var lastFlush time.Time
+		status := "Starting Gemini..."
+
+		flush := func() {
+			t := thoughts.String()
+			ans := answer.String()
+			st := status
+			a.win.Update(func() {
+				if a.aiRunID != runID {
+					return
+				}
+				a.AISummaryThinking = t
+				a.AISummaryOutput = ans
+				a.AISummaryStatus = st
+			})
+		}
+
+		onThought := func(chunk string) {
+			thoughts.WriteString(chunk)
+			status = "Thinking..."
+			if time.Since(lastFlush) >= 100*time.Millisecond {
+				lastFlush = time.Now()
+				flush()
+			}
+		}
+		onText := func(chunk string) {
+			answer.WriteString(chunk)
+			status = "Writing summaries..."
+			if time.Since(lastFlush) >= 100*time.Millisecond {
+				lastFlush = time.Now()
+				flush()
+			}
+		}
+
+		result, err := StreamGeminiSummaries(ctx, apiKey, model, prompt, onThought, onText)
+
+		a.win.Update(func() {
+			if a.aiRunID != runID {
+				return
+			}
+			a.aiCancel = nil
+			a.AISummaryStatus = ""
+
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					a.AISummaryStep = 0
+					a.AISummaryThinking = ""
+					a.AISummaryOutput = ""
+					return
+				}
+				a.AISummaryThinking = result.Thoughts
+				a.AISummaryOutput = result.Answer
+				a.AISummaryError = err.Error()
+				return
+			}
+
+			a.AISummaryThinking = result.Thoughts
+			a.AISummaryOutput = result.Answer
+			switch result.FinishReason {
+			case "MAX_TOKENS":
+				a.AISummaryWarning = "Gemini's response was truncated. Some summaries may be incomplete."
+			case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT":
+				a.AISummaryWarning = fmt.Sprintf("Gemini stopped early (%s). Some summaries may be missing.", result.FinishReason)
+			}
+
+			blocks := ParsePastedSummaries(stripCodeFences(result.Answer))
+			if len(blocks) == 0 {
+				a.AISummaryError = "Gemini returned text, but no summaries could be parsed. Try again."
+				return
+			}
+
+			matches, options := MatchSummariesToArticles(blocks, a.Articles, false)
+			a.AISummaryMatches = matches
+			a.AISummaryOptions = options
+			a.AISummaryStep = 2
+		})
+	}()
+}
+
+func (a *App) cancelAIRequest() {
+	if a.aiCancel != nil {
+		a.aiCancel()
+		a.aiCancel = nil
+	}
+	a.aiRunID++
+}
+
+func (a *App) CancelAISummary() {
+	a.cancelAIRequest()
+	a.AISummaryStep = 0
+	a.AISummaryStatus = ""
+	a.AISummaryThinking = ""
+	a.AISummaryOutput = ""
+	a.AISummaryError = ""
+	a.AISummaryWarning = ""
+}
+
+func (a *App) CloseAISummaryModal() {
+	a.cancelAIRequest()
+	a.ShowAISummaryModal = false
+}
+
+// ---------------- Settings ----------------
+
+func (a *App) OpenSettingsModal() {
+	a.SettingsDraftAPIKey = a.Settings.GeminiAPIKey
+	a.SettingsDraftModel = a.Settings.GeminiModel
+	a.SettingsDraftPrompt = a.Settings.GeminiPrompt
+	a.ShowSettingsModal = true
+}
+
+func (a *App) SaveSettingsModal() {
+	a.Settings.GeminiAPIKey = strings.TrimSpace(a.SettingsDraftAPIKey)
+	a.Settings.GeminiModel = strings.TrimSpace(a.SettingsDraftModel)
+	if a.Settings.GeminiModel == "" {
+		a.Settings.GeminiModel = DefaultGeminiModel
+	}
+	a.Settings.GeminiPrompt = strings.TrimSpace(a.SettingsDraftPrompt)
+	if a.Settings.GeminiPrompt == "" {
+		a.Settings.GeminiPrompt = DefaultGeminiPrompt
+	}
+	_ = a.Settings.Save()
+	a.ShowSettingsModal = false
 }
 
 // ---------------- UI VIEW ----------------
 
 func (a *App) View(c *ui.Context) {
+	// Closing the AI modal (backdrop or Escape) also cancels an in-flight request.
+	if !a.ShowAISummaryModal && a.aiCancel != nil {
+		a.cancelAIRequest()
+	}
+
 	// Sync accent across all native widgets
 	t := *c.Theme()
 	t.Accent = a.Theme.ActiveRowBg
@@ -858,6 +1075,18 @@ func (a *App) renderToolbar(c *ui.Context) {
 		}
 
 		if ui.Button(c, "").
+			Tooltip("Generate Missing Summaries with Gemini").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconSparkle).Size(14, 14)
+				ui.Text(c, "AI Summary").SingleLine()
+			}).Clicked() {
+			a.OpenAISummaryModal()
+		}
+
+		if ui.Button(c, "").
 			Tooltip("Export Weekly Rollup").
 			Border(1, a.Theme.Border).
 			Radius(6).
@@ -918,6 +1147,20 @@ func (a *App) renderToolbar(c *ui.Context) {
 				ui.Text(c, themeText).SingleLine()
 			}).Clicked() {
 			a.ToggleTheme()
+		}
+
+		ui.Divider(c)
+
+		if ui.Button(c, "").
+			Tooltip("Settings").
+			Border(1, a.Theme.Border).
+			Radius(6).
+			Gap(6).
+			Children(func() {
+				ui.Icon(c, IconSettings).Size(14, 14)
+				ui.Text(c, "Settings").SingleLine()
+			}).Clicked() {
+			a.OpenSettingsModal()
 		}
 	}).Background(a.Theme.ToolbarBg).Label("Mebot Toolbar")
 }
@@ -1236,6 +1479,274 @@ func (a *App) renderModals(c *ui.Context) {
 				}
 				if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
 					a.ApplyBatchMatches()
+				}
+			})
+		}
+	})
+
+	// 7. Settings Modal
+	ui.Modal(c, &a.ShowSettingsModal, func() {
+		ui.Text(c, "Settings").FontSize(16).Bold().TextColor(a.Theme.Text)
+
+		ui.Text(c, "Gemini").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+
+		ui.Text(c, "API Key").FontSize(11).TextColor(a.Theme.TextMuted)
+		ui.TextInput(c.Key("geminiAPIKeyInput"), &a.SettingsDraftAPIKey).
+			Password().
+			Placeholder("AIza...").
+			Grow(1)
+		ui.Text(c, "Stored locally in settings.json. You can also set GEMINI_API_KEY.").
+			FontSize(11).TextColor(a.Theme.TextMuted)
+
+		ui.Text(c, "Model").FontSize(11).TextColor(a.Theme.TextMuted)
+		ui.TextInput(c.Key("geminiModelInput"), &a.SettingsDraftModel).
+			Placeholder(DefaultGeminiModel).
+			Grow(1)
+
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Summary prompt").FontSize(11).TextColor(a.Theme.TextMuted)
+			ui.Spacer(c)
+			if ui.Button(c, "Reset to default").Border(1, a.Theme.Border).Radius(6).Clicked() {
+				a.SettingsDraftPrompt = DefaultGeminiPrompt
+			}
+		})
+		ui.TextArea(c.Key("geminiPromptInput"), &a.SettingsDraftPrompt).
+			Placeholder(DefaultGeminiPrompt).
+			Height(140).
+			Grow(1)
+
+		ui.Text(c, "The free tier has strict limits. One request is sent per Generate click, with no automatic retries.").
+			FontSize(11).TextColor(a.Theme.TextMuted)
+
+		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			if ui.Button(c, "Cancel").Clicked() {
+				a.ShowSettingsModal = false
+			}
+			if ui.PrimaryButton(c, "Save Settings").Clicked() {
+				a.SaveSettingsModal()
+				c.Toast("Settings saved")
+			}
+		})
+	})
+
+	// 8. Gemini AI Summary Modal
+	ui.Modal(c, &a.ShowAISummaryModal, func() {
+		switch a.AISummaryStep {
+		case 0:
+			ui.Row(c).FillWidth().MinWidth(480).Gap(16).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Generate Missing Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
+				ui.Spacer(c)
+				ui.Box(c).Width(16)
+				if ui.Button(c, "Settings").Clicked() {
+					a.CloseAISummaryModal()
+					a.OpenSettingsModal()
+				}
+			})
+
+			if len(a.Articles) == 0 {
+				ui.Text(c, "This project has no articles.").FontSize(12).TextColor(a.Theme.TextMuted)
+				ui.Row(c).Justify(ui.End).Children(func() {
+					if ui.Button(c, "Close").Clicked() {
+						a.CloseAISummaryModal()
+					}
+				})
+				return
+			}
+
+			if len(a.AISummaryTargets) == 0 {
+				ui.Text(c, "All articles in this project already have a summary.").
+					FontSize(12).TextColor(a.Theme.TextMuted)
+				ui.Row(c).Justify(ui.End).Children(func() {
+					if ui.Button(c, "Close").Clicked() {
+						a.CloseAISummaryModal()
+					}
+				})
+				return
+			}
+
+			ui.Text(c, fmt.Sprintf("%d article(s) have no summary yet. Gemini will summarize all of them in one request.",
+				len(a.AISummaryTargets))).FontSize(12).TextColor(a.Theme.TextMuted)
+			model := strings.TrimSpace(a.Settings.GeminiModel)
+			if model == "" {
+				model = DefaultGeminiModel
+			}
+			ui.Text(c, "Model: "+model+" • One API request for the whole batch").
+				FontSize(11).TextColor(a.Theme.TextMuted)
+
+			ui.Scroll(c).Height(240).Children(func() {
+				ui.Column(c).Gap(4).AlignItems(ui.Stretch).Children(func() {
+					for _, art := range a.AISummaryTargets {
+						ui.Text(c, "• "+art.Title).FontSize(12).TextColor(a.Theme.Text).SingleLine()
+					}
+				})
+			})
+
+			if a.geminiAPIKey() == "" {
+				ui.Text(c, "Gemini API key is not set. Add it in Settings first.").
+					FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
+			}
+			if a.AISummaryError != "" {
+				ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
+			}
+
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					a.CloseAISummaryModal()
+				}
+				if a.geminiAPIKey() != "" {
+					if ui.PrimaryButton(c, "Generate Summaries").Clicked() {
+						a.StartAISummary()
+					}
+				}
+			})
+
+		case 1:
+			ui.Row(c).FillWidth().MinWidth(480).AlignItems(ui.Center).Gap(8).Children(func() {
+				if a.AISummaryError == "" && a.AISummaryStatus != "" {
+					ui.Spinner(c)
+				}
+				ui.Text(c, "Gemini").FontSize(16).Bold().TextColor(a.Theme.Text)
+				ui.Spacer(c)
+				if a.AISummaryStatus != "" {
+					ui.Text(c, a.AISummaryStatus).FontSize(11).TextColor(a.Theme.TextMuted)
+				}
+			})
+
+			if a.AISummaryThinking != "" {
+				ui.Text(c, "THINKING").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+				ui.Scroll(c).Height(120).Children(func() {
+					ui.Text(c, tailRunes(a.AISummaryThinking, 2500)).
+						FontSize(11).TextColor(a.Theme.TextMuted)
+				})
+			}
+
+			if a.AISummaryOutput != "" {
+				ui.Text(c, "SUMMARIES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+				ui.Scroll(c).Height(240).Children(func() {
+					ui.Text(c, tailRunes(a.AISummaryOutput, 4000)).
+						FontSize(12).TextColor(a.Theme.Text)
+				})
+			}
+
+			if a.AISummaryError != "" {
+				ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
+				ui.Text(c, "Each retry sends another Gemini request.").
+					FontSize(11).TextColor(a.Theme.TextMuted)
+			}
+
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if a.AISummaryError == "" {
+					if ui.Button(c, "Cancel").Clicked() {
+						a.CancelAISummary()
+					}
+				} else {
+					if ui.Button(c, "Back").Clicked() {
+						a.AISummaryStep = 0
+						a.AISummaryError = ""
+					}
+					if ui.Button(c, "Settings").Clicked() {
+						a.CloseAISummaryModal()
+						a.OpenSettingsModal()
+					}
+					if ui.PrimaryButton(c, "Retry").Clicked() {
+						a.StartAISummary()
+					}
+				}
+			})
+
+		case 2:
+			ui.Row(c).FillWidth().MinWidth(480).Gap(16).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Review AI Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
+				ui.Spacer(c)
+				if ui.Button(c, "Back").Clicked() {
+					a.AISummaryStep = 0
+					a.AISummaryError = ""
+				}
+			})
+
+			matchedSet := make(map[string]bool)
+			var matchedTitles []string
+			for _, match := range a.AISummaryMatches {
+				if match.SelectedOption == OptionDoNotMatch || matchedSet[match.SelectedOption] {
+					continue
+				}
+				matchedSet[match.SelectedOption] = true
+				matchedTitles = append(matchedTitles, match.SelectedOption)
+			}
+			matchedCount := len(matchedTitles)
+
+			ui.Text(c, fmt.Sprintf("Gemini returned %d summaries. %d article(s) will receive a summary.",
+				len(a.AISummaryMatches), matchedCount)).
+				FontSize(12).TextColor(a.Theme.TextMuted)
+
+			if a.AISummaryWarning != "" {
+				ui.Text(c, a.AISummaryWarning).FontSize(11).TextColor(ui.Hex("#b26a00"))
+			}
+			if matchedCount < len(a.AISummaryTargets) {
+				ui.Text(c, fmt.Sprintf("%d of the %d articles without a summary still have no matched summary.",
+					len(a.AISummaryTargets)-matchedCount, len(a.AISummaryTargets))).
+					FontSize(11).TextColor(ui.Hex("#b26a00"))
+			}
+			if matchedCount > 0 {
+				ui.Text(c, "Articles receiving summaries:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+				ui.Scroll(c).Height(80).Children(func() {
+					ui.Column(c).Gap(2).AlignItems(ui.Stretch).Children(func() {
+						for _, title := range matchedTitles {
+							ui.Text(c, "• "+title).
+								FontSize(11).TextColor(a.Theme.Accent).SingleLine()
+						}
+					})
+				})
+			}
+
+			ui.Scroll(c).Grow(1).Children(func() {
+				ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
+					for i := range a.AISummaryMatches {
+						item := &a.AISummaryMatches[i]
+
+						ui.Column(c).
+							Padding(10).
+							Radius(6).
+							Background(a.Theme.SidebarBg).
+							Border(1, a.Theme.Border).
+							Gap(6).
+							Children(func() {
+								ui.Text(c, "Summary Title: "+item.RawTitle).
+									FontSize(13).Bold().TextColor(a.Theme.Text)
+
+								excerpt := item.Body
+								if len([]rune(excerpt)) > 120 {
+									excerpt = string([]rune(excerpt)[:120]) + "..."
+								}
+								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
+
+								ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+									ui.Text(c, "Assign to:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+									ui.Select(c.Key(fmt.Sprintf("aiAssignSel_%d", i)), &item.SelectedOption, a.AISummaryOptions).Width(340)
+								})
+							})
+					}
+				})
+			})
+
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					a.CloseAISummaryModal()
+				}
+				if matchedCount > 0 {
+					if ui.PrimaryButton(c, "Save Summaries").Clicked() {
+						applied := a.applySummaryMatches(a.AISummaryMatches)
+						a.ShowAISummaryModal = false
+						a.AISummaryStep = 0
+						switch len(applied) {
+						case 0:
+							c.Toast("No summaries were saved")
+						case 1:
+							c.Toast("Saved summary for 1 article")
+						default:
+							c.Toast(fmt.Sprintf("Saved summaries for %d articles", len(applied)))
+						}
+					}
 				}
 			})
 		}
