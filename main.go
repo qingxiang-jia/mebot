@@ -1515,7 +1515,7 @@ func (a *App) renderModals(c *ui.Context) {
 			Height(140).
 			Grow(1)
 
-		ui.Text(c, "The free tier has strict limits. One request is sent per Generate click, with no automatic retries.").
+		ui.Text(c, "The free tier has strict limits. One request is sent per Generate click, with no automatic retries. A 503 usually means Gemini is at capacity; retry later or try another model.").
 			FontSize(11).TextColor(a.Theme.TextMuted)
 
 		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {

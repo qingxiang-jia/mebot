@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -76,6 +77,18 @@ func TestParseGeminiSSESeparatesThoughtsAndAnswer(t *testing.T) {
 	}
 	if len(textChunks) != 2 {
 		t.Errorf("unexpected text chunks: %#v", textChunks)
+	}
+}
+
+func TestFormatGeminiHTTPError503(t *testing.T) {
+	err := formatGeminiHTTPError(http.StatusServiceUnavailable, []byte(`{"error":{"code":503,"message":"This model is currently experiencing high demand."}}`))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{"503", "overloaded", "different Gemini model", "high demand"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
 	}
 }
 

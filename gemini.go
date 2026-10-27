@@ -140,10 +140,14 @@ func StreamGeminiSummaries(
 			Parts: []geminiPart{{Text: prompt}},
 		}},
 		GenerationConfig: geminiGenerationConfig{
-			Temperature:     0.2,
 			MaxOutputTokens: 65536,
 			ThinkingConfig:  geminiThinkingConfigForModel(model),
 		},
+	}
+	// Gemini 4 and Gemini 3.6+ ignore temperature; sending it will be an
+	// error in a future release, so leave it out for the 3.x/4.x models.
+	if !strings.HasPrefix(model, "gemini-3") && !strings.HasPrefix(model, "gemini-4") {
+		body.GenerationConfig.Temperature = 0.2
 	}
 
 	payload, err := json.Marshal(body)
@@ -182,6 +186,9 @@ func formatGeminiHTTPError(status int, body []byte) error {
 		Error geminiAPIError `json:"error"`
 	}
 	if err := json.Unmarshal(body, &payload); err == nil && strings.TrimSpace(payload.Error.Message) != "" {
+		if status == http.StatusServiceUnavailable {
+			return geminiUnavailableError(payload.Error.Message)
+		}
 		if status == http.StatusTooManyRequests {
 			return fmt.Errorf("Gemini rate limit reached. Wait a bit before trying again. (%s)", payload.Error.Message)
 		}
@@ -198,10 +205,19 @@ func formatGeminiHTTPError(status int, body []byte) error {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
+	if status == http.StatusServiceUnavailable {
+		return geminiUnavailableError(msg)
+	}
 	if status == http.StatusTooManyRequests {
 		return fmt.Errorf("Gemini rate limit reached. Wait a bit before trying again. (%s)", msg)
 	}
 	return fmt.Errorf("Gemini API error (%d): %s", status, msg)
+}
+
+// geminiUnavailableError explains a 503, which Gemini returns when the model
+// is at capacity. It is a Google-side condition, not a malformed request.
+func geminiUnavailableError(detail string) error {
+	return fmt.Errorf("Gemini is temporarily overloaded (503). This is usually a Google-side capacity issue; retry later, or try a different Gemini model in Settings. (%s)", detail)
 }
 
 func parseGeminiSSE(r io.Reader, onThought, onText func(string)) (GeminiStreamResult, error) {

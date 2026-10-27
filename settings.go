@@ -8,8 +8,13 @@ import (
 )
 
 const (
-	DefaultGeminiModel  = "gemini-3.8-flash"
+	DefaultGeminiModel  = "gemini-3.5-flash-lite"
 	DefaultGeminiPrompt = "Can you provide a detailed summary for each of the following articles? Do not change the title. I prefer simple English terms and no bullet points so that the flow is smooth."
+
+	// legacyGeminiModel was the default before Gemini 3.8 Flash started
+	// returning 503 on the free tier. Existing settings are moved to the
+	// current default on load.
+	legacyGeminiModel = "gemini-3.8-flash"
 )
 
 type ProjectSelectionState struct {
@@ -51,7 +56,7 @@ func LoadSettings() *AppSettings {
 	if s.ProjectStates == nil {
 		s.ProjectStates = make(map[string]ProjectSelectionState)
 	}
-	if strings.TrimSpace(s.GeminiModel) == "" {
+	if strings.TrimSpace(s.GeminiModel) == "" || s.GeminiModel == legacyGeminiModel {
 		s.GeminiModel = DefaultGeminiModel
 	}
 	if strings.TrimSpace(s.GeminiPrompt) == "" {

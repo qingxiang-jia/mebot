@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+func TestLoadSettingsMigratesLegacyGeminiModel(t *testing.T) {
+	home := t.TempDir()
+	stateHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	stateDir := filepath.Join(stateHome, "mebot")
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy := `{"gemini_model": "gemini-3.8-flash"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "settings.json"), []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := LoadSettings()
+	if settings.GeminiModel != DefaultGeminiModel {
+		t.Errorf("GeminiModel = %q, want %q", settings.GeminiModel, DefaultGeminiModel)
+	}
+}
+
 func TestLoadSettingsBackwardsCompatible(t *testing.T) {
 	home := t.TempDir()
 	stateHome := t.TempDir()
