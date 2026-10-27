@@ -1,9 +1,9 @@
 module mebot
 
-go 1.27.1
+go 1.27.3
 
 require (
-	github.com/egoist/mygo v0.6.0
+	github.com/egoist/mygo v0.7.1
 	github.com/markusmobius/go-trafilatura/v2 v2.2.6
 	golang.design/x/clipboard v0.7.0
 )
