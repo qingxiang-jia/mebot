@@ -47,6 +47,8 @@ type App struct {
 	Settings         *AppSettings
 	AvailableFonts   []string
 	SelectedFont     string
+	FontPickerText   string
+	FontPickerOpen   bool
 	FontSizeOptions  []string
 	SelectedFontSize string
 
@@ -145,6 +147,7 @@ func NewApp() *App {
 		Settings:                 settings,
 		AvailableFonts:           fonts,
 		SelectedFont:             defaultFont,
+		FontPickerText:           defaultFont,
 		FontSizeOptions:          fontSizeOptions,
 		SelectedFontSize:         fontSize,
 		Theme:                    theme,
@@ -199,6 +202,12 @@ func FilterCleanReadingFonts(rawFonts []string) []string {
 			strings.Contains(lower, "braille") || strings.Contains(lower, "math") {
 			continue
 		}
+		// Noto Sans and Noto Serif have a family for each script and
+		// weight, but their Latin glyphs are the base family's, so they
+		// only fill the picker with near duplicates.
+		if isNotoVariant(lower) {
+			continue
+		}
 		if strings.Contains(lower, "sans") || strings.Contains(lower, "serif") ||
 			strings.Contains(lower, "mono") || strings.Contains(lower, "roboto") ||
 			strings.Contains(lower, "inter") || strings.Contains(lower, "ubuntu") ||
@@ -211,6 +220,18 @@ func FilterCleanReadingFonts(rawFonts []string) []string {
 		return clean
 	}
 	return rawFonts
+}
+
+// isNotoVariant reports whether lower names a per-script or per-weight cut
+// of Noto Sans or Noto Serif. The base families, and their distinct Mono
+// and Display designs, are not variants.
+func isNotoVariant(lower string) bool {
+	switch lower {
+	case "noto sans", "noto sans mono", "noto sans display",
+		"noto serif", "noto serif display":
+		return false
+	}
+	return strings.HasPrefix(lower, "noto sans ") || strings.HasPrefix(lower, "noto serif ")
 }
 
 func (a *App) CurrentFontSize() float32 {
@@ -1126,12 +1147,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 		// Group 3: Typography & Theme
 		ui.Text(c, "Font:").FontSize(11).TextColor(a.Theme.TextMuted)
 		if len(a.AvailableFonts) > 0 {
-			prevFont := a.SelectedFont
-			ui.Combobox(c.Key("fontFamilySelector"), &a.SelectedFont, a.AvailableFonts).Width(160)
-			if a.SelectedFont != prevFont {
-				a.Settings.FontFamily = a.SelectedFont
-				_ = a.Settings.Save()
-			}
+			a.fontCombobox(c)
 		}
 
 		ui.Text(c, "Size:").FontSize(11).TextColor(a.Theme.TextMuted)
