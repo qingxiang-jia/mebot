@@ -16,7 +16,6 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
-	"golang.design/x/clipboard"
 )
 
 type App struct {
@@ -95,8 +94,6 @@ type App struct {
 }
 
 func NewApp() *App {
-	_ = clipboard.Init()
-
 	settings := LoadSettings()
 	if settings.IsDarkMode {
 		mygo.Theme.SetSource(mygo.ThemeDark)
@@ -514,6 +511,14 @@ func (a *App) ConfirmDeleteChosenArticles() {
 	a.ShowDeleteArticleConfirm = false
 }
 
+// writeClipboardText puts plain text on the clipboard. golang.design/x/clipboard
+// advertised "image/png" next to the text target even for text-only writes, so
+// Gemini and AI Studio pasted the text as a broken image. MyGo's clipboard only
+// offers the text representations it was given.
+func writeClipboardText(text string) {
+	mygo.Clipboard.WriteText(text)
+}
+
 func (a *App) CopySelectedTitles() {
 	var titles []string
 	if a.ChosenArticles.Len() > 0 {
@@ -526,7 +531,7 @@ func (a *App) CopySelectedTitles() {
 		titles = append(titles, a.CurrentArticle().Title)
 	}
 	if len(titles) > 0 {
-		clipboard.Write(clipboard.FmtText, []byte(strings.Join(titles, "\n")))
+		writeClipboardText(strings.Join(titles, "\n"))
 	}
 }
 
@@ -547,7 +552,7 @@ func (a *App) CopySelectedContents() {
 		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", art.Title, art.FullText))
 	}
 	if sb.Len() > 0 {
-		clipboard.Write(clipboard.FmtText, []byte(sb.String()))
+		writeClipboardText(sb.String())
 	}
 }
 
@@ -573,7 +578,7 @@ func (a *App) CopySelectedSummaries() {
 		}
 	}
 	if sb.Len() > 0 {
-		clipboard.Write(clipboard.FmtText, []byte(sb.String()))
+		writeClipboardText(sb.String())
 	}
 }
 

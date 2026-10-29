@@ -5,7 +5,6 @@ go 1.27.3
 require (
 	github.com/egoist/mygo v0.7.1
 	github.com/markusmobius/go-trafilatura/v2 v2.2.6
-	golang.design/x/clipboard v0.7.0
 )
 
 require (
@@ -27,9 +26,7 @@ require (
 	github.com/wasilibs/go-re2 v1.12.0 // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20250123031827-cd30c44769bb // indirect
 	github.com/yosssi/gohtml v0.0.0-20201013000340-ee4748c638f4 // indirect
-	golang.org/x/exp/shiny v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/image v0.47.0 // indirect
-	golang.org/x/mobile v0.0.0-20260908204917-8b95e45f8d3e // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
