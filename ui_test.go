@@ -2,7 +2,9 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -113,6 +115,36 @@ func TestSummaryPreviewMenuIsDrawn(t *testing.T) {
 	}
 	if menu := tt.Menu(); menu != nil {
 		t.Errorf("the system shows a menu too: %q", menu)
+	}
+}
+
+// TestAISummaryModalKeepsItsWidthWhileStreaming checks that the running
+// dialog stays at the width it opens with and wraps the streamed text,
+// instead of growing as the text gets longer.
+func TestAISummaryModalKeepsItsWidthWhileStreaming(t *testing.T) {
+	output := strings.Repeat("A summary line with plenty of words that have to wrap at the dialog's width. ", 30)
+	a := &App{
+		Articles:           []*Article{{Title: "First"}},
+		ShowAISummaryModal: true,
+		AISummaryStep:      1,
+		AISummaryTargets:   []Article{{Title: "First"}},
+		AISummaryStatus:    "Writing summaries...",
+		AISummaryOutput:    output,
+		AISummaryStartedAt: time.Now(),
+		Settings:           &AppSettings{},
+		Theme:              MacOSLightTheme(),
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.renderModals(c) }, 900, 700)
+
+	if !tt.HasText("First") || !tt.HasText("REQUEST") || !tt.HasText("Model: "+DefaultGeminiModel) {
+		t.Fatalf("the running dialog does not show the request details: %q", tt.Texts())
+	}
+	rect, ok := tt.Find(output)
+	if !ok {
+		t.Fatalf("the streamed text is not drawn: %q", tt.Texts())
+	}
+	if rect.W > 500 {
+		t.Errorf("the streamed text is %v wide, want at most 500: the dialog grew with it", rect.W)
 	}
 }
 

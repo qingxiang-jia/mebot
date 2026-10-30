@@ -85,6 +85,7 @@ type App struct {
 	AISummaryWarning   string
 	AISummaryMatches   []ParsedSummaryBlock
 	AISummaryOptions   []string
+	AISummaryStartedAt time.Time
 	aiCancel           context.CancelFunc
 	aiRunID            int
 
@@ -885,6 +886,7 @@ func (a *App) OpenAISummaryModal() {
 	a.AISummaryMatches = nil
 	a.AISummaryOptions = nil
 	a.AISummaryTargets = nil
+	a.AISummaryStartedAt = time.Time{}
 
 	for _, art := range a.Articles {
 		if IsSummaryEmpty(art.Summary) {
@@ -902,6 +904,36 @@ func (a *App) geminiAPIKey() string {
 	return key
 }
 
+// aiSummaryModel is the model the AI summary will use, with the default
+// filled in for an empty setting.
+func (a *App) aiSummaryModel() string {
+	model := strings.TrimSpace(a.Settings.GeminiModel)
+	if model == "" {
+		return DefaultGeminiModel
+	}
+	return model
+}
+
+// formatElapsed shows a wait for people reading it, in seconds under a
+// minute and in minutes and seconds past it.
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	secs := int(d.Round(time.Second) / time.Second)
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	mins := secs / 60
+	secs -= mins * 60
+	if mins < 60 {
+		return fmt.Sprintf("%dm %02ds", mins, secs)
+	}
+	hours := mins / 60
+	mins -= hours * 60
+	return fmt.Sprintf("%dh %02dm", hours, mins)
+}
+
 func (a *App) StartAISummary() {
 	if a.aiCancel != nil {
 		return
@@ -917,10 +949,7 @@ func (a *App) StartAISummary() {
 		return
 	}
 
-	model := strings.TrimSpace(a.Settings.GeminiModel)
-	if model == "" {
-		model = DefaultGeminiModel
-	}
+	model := a.aiSummaryModel()
 	prompt := BuildSummaryPrompt(a.Settings.GeminiPrompt, a.AISummaryTargets)
 
 	a.AISummaryStep = 1
@@ -928,9 +957,10 @@ func (a *App) StartAISummary() {
 	a.AISummaryWarning = ""
 	a.AISummaryThinking = ""
 	a.AISummaryOutput = ""
-	a.AISummaryStatus = "Starting Gemini..."
+	a.AISummaryStatus = "Waiting for Gemini..."
 	a.AISummaryMatches = nil
 	a.AISummaryOptions = nil
+	a.AISummaryStartedAt = time.Now()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.aiCancel = cancel
@@ -940,7 +970,7 @@ func (a *App) StartAISummary() {
 	go func() {
 		var thoughts, answer strings.Builder
 		var lastFlush time.Time
-		status := "Starting Gemini..."
+		status := "Waiting for Gemini..."
 
 		flush := func() {
 			t := thoughts.String()
@@ -1034,6 +1064,7 @@ func (a *App) CancelAISummary() {
 	a.AISummaryOutput = ""
 	a.AISummaryError = ""
 	a.AISummaryWarning = ""
+	a.AISummaryStartedAt = time.Time{}
 }
 
 func (a *App) CloseAISummaryModal() {
@@ -1678,10 +1709,7 @@ func (a *App) renderModals(c *ui.Context) {
 
 			ui.Text(c, fmt.Sprintf("%d article(s) have no summary yet. Gemini will summarize all of them in one request.",
 				len(a.AISummaryTargets))).FontSize(12).TextColor(a.Theme.TextMuted)
-			model := strings.TrimSpace(a.Settings.GeminiModel)
-			if model == "" {
-				model = DefaultGeminiModel
-			}
+			model := a.aiSummaryModel()
 			ui.Text(c, "Model: "+model+" • One API request for the whole batch").
 				FontSize(11).TextColor(a.Theme.TextMuted)
 
@@ -1713,57 +1741,100 @@ func (a *App) renderModals(c *ui.Context) {
 			})
 
 		case 1:
-			ui.Row(c).FillWidth().MinWidth(480).AlignItems(ui.Center).Gap(8).Children(func() {
-				if a.AISummaryError == "" && a.AISummaryStatus != "" {
-					ui.Spinner(c)
-				}
-				ui.Text(c, "Gemini").FontSize(16).Bold().TextColor(a.Theme.Text)
-				ui.Spacer(c)
-				if a.AISummaryStatus != "" {
-					ui.Text(c, a.AISummaryStatus).FontSize(11).TextColor(a.Theme.TextMuted)
-				}
-			})
+			// The column's fixed width keeps the dialog from growing as the
+			// streamed text gets longer: the text wraps at this width instead.
+			ui.Column(c).Width(480).Gap(12).Children(func() {
+				ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+					if a.AISummaryError == "" && a.AISummaryStatus != "" {
+						ui.Spinner(c)
+					}
+					ui.Text(c, "Gemini").FontSize(16).Bold().TextColor(a.Theme.Text)
+					ui.Spacer(c)
+					if a.AISummaryStatus != "" {
+						ui.Text(c, a.AISummaryStatus).FontSize(11).TextColor(a.Theme.TextMuted)
+					}
+				})
 
-			if a.AISummaryThinking != "" {
-				ui.Text(c, "THINKING").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-				ui.Scroll(c).Height(120).Children(func() {
-					ui.Text(c, tailRunes(a.AISummaryThinking, 2500)).
+				// Show what was sent while the free tier takes its time, so
+				// the wait has something to read besides the spinner.
+				ui.Column(c).
+					Padding(10).
+					Radius(6).
+					Background(a.Theme.SidebarBg).
+					Border(1, a.Theme.Border).
+					Gap(4).
+					Children(func() {
+						ui.Text(c, "REQUEST").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+						ui.Text(c, "Model: "+a.aiSummaryModel()).
+							FontSize(11).TextColor(a.Theme.Text)
+						ui.Text(c, fmt.Sprintf("%d article(s) in one request", len(a.AISummaryTargets))).
+							FontSize(11).TextColor(a.Theme.Text)
+						if !a.AISummaryStartedAt.IsZero() && a.AISummaryError == "" {
+							wait := "Elapsed: " + formatElapsed(time.Since(a.AISummaryStartedAt))
+							if a.AISummaryOutput == "" && a.AISummaryThinking == "" {
+								wait += " • waiting for Gemini's first words"
+							}
+							ui.Text(c, wait).FontSize(11).TextColor(a.Theme.TextMuted)
+						}
+						if a.AISummaryOutput == "" && a.AISummaryThinking == "" && a.AISummaryError == "" {
+							ui.Text(c, "The free tier can take a while before Gemini responds.").
+								FontSize(11).TextColor(a.Theme.TextMuted)
+						}
+					})
+
+				if len(a.AISummaryTargets) > 0 {
+					ui.Text(c, "ARTICLES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+					ui.Scroll(c).Height(96).Children(func() {
+						ui.Column(c).Gap(2).AlignItems(ui.Stretch).Children(func() {
+							for _, art := range a.AISummaryTargets {
+								ui.Text(c, "• "+art.Title).
+									FontSize(11).TextColor(a.Theme.TextMuted).SingleLine()
+							}
+						})
+					})
+				}
+
+				if a.AISummaryThinking != "" {
+					ui.Text(c, "THINKING").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+					ui.Scroll(c).Height(120).Children(func() {
+						ui.Text(c, tailRunes(a.AISummaryThinking, 2500)).
+							FontSize(11).TextColor(a.Theme.TextMuted)
+					})
+				}
+
+				if a.AISummaryOutput != "" {
+					ui.Text(c, "SUMMARIES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+					ui.Scroll(c).Height(240).Children(func() {
+						ui.Text(c, tailRunes(a.AISummaryOutput, 4000)).
+							FontSize(12).TextColor(a.Theme.Text)
+					})
+				}
+
+				if a.AISummaryError != "" {
+					ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
+					ui.Text(c, "Each retry sends another Gemini request.").
 						FontSize(11).TextColor(a.Theme.TextMuted)
-				})
-			}
-
-			if a.AISummaryOutput != "" {
-				ui.Text(c, "SUMMARIES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-				ui.Scroll(c).Height(240).Children(func() {
-					ui.Text(c, tailRunes(a.AISummaryOutput, 4000)).
-						FontSize(12).TextColor(a.Theme.Text)
-				})
-			}
-
-			if a.AISummaryError != "" {
-				ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-				ui.Text(c, "Each retry sends another Gemini request.").
-					FontSize(11).TextColor(a.Theme.TextMuted)
-			}
-
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-				if a.AISummaryError == "" {
-					if ui.Button(c, "Cancel").Clicked() {
-						a.CancelAISummary()
-					}
-				} else {
-					if ui.Button(c, "Back").Clicked() {
-						a.AISummaryStep = 0
-						a.AISummaryError = ""
-					}
-					if ui.Button(c, "Settings").Clicked() {
-						a.CloseAISummaryModal()
-						a.OpenSettingsModal()
-					}
-					if ui.PrimaryButton(c, "Retry").Clicked() {
-						a.StartAISummary()
-					}
 				}
+
+				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+					if a.AISummaryError == "" {
+						if ui.Button(c, "Cancel").Clicked() {
+							a.CancelAISummary()
+						}
+					} else {
+						if ui.Button(c, "Back").Clicked() {
+							a.AISummaryStep = 0
+							a.AISummaryError = ""
+						}
+						if ui.Button(c, "Settings").Clicked() {
+							a.CloseAISummaryModal()
+							a.OpenSettingsModal()
+						}
+						if ui.PrimaryButton(c, "Retry").Clicked() {
+							a.StartAISummary()
+						}
+					}
+				})
 			})
 
 		case 2:
