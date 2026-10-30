@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
 // articleListApp builds the list of the sidebar, with the menu its rows
@@ -87,6 +88,31 @@ func TestArticleMenuActsOnTheRowRightClicked(t *testing.T) {
 	}
 	if !a.ShowDeleteArticleConfirm {
 		t.Error("Delete did not ask to confirm")
+	}
+}
+
+// TestSummaryPreviewMenuIsDrawn checks that right-clicking the summary's
+// preview opens a menu MyGo draws in the window, not the system's.
+func TestSummaryPreviewMenuIsDrawn(t *testing.T) {
+	a := &App{
+		Articles:           []*Article{{Title: "One", Summary: "hello world"}},
+		ActiveIdx:          0,
+		ShowMarkdownRender: true,
+		Theme:              MacOSLightTheme(),
+		mdOpts:             markdown.Options{ShareSelection: true},
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 500, 400)
+
+	r, ok := tt.Find("hello world")
+	if !ok {
+		t.Fatalf("the preview shows no text: %q", tt.Texts())
+	}
+	tt.RightClickAt(r.X+r.W/2, r.Y+r.H/2)
+	if !tt.HasText("Copy Summary as Markdown") {
+		t.Fatalf("the preview's menu is not the one drawn in the window: texts %q", tt.Texts())
+	}
+	if menu := tt.Menu(); menu != nil {
+		t.Errorf("the system shows a menu too: %q", menu)
 	}
 }
 

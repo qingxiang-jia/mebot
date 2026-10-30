@@ -163,7 +163,10 @@ func NewApp() *App {
 		ShowAISummaryModal:       false,
 		AISummaryStep:            0,
 		ShowSettingsModal:        false,
-		mdOpts:                   markdown.Options{},
+		// The summary's preview shares its selection with the box around
+		// it, whose menu mygo draws in the window: the view's own is the
+		// system's, GTK's on Linux.
+		mdOpts: markdown.Options{ShareSelection: true},
 	}
 
 	app.ArticleListState.Selected = &app.ActiveIdx
@@ -1379,7 +1382,19 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 
 		if a.ShowMarkdownRender {
 			ui.Scroll(c).Grow(1).Children(func() {
-				markdown.View(c, current.Summary, &a.mdOpts)
+				// The markdown view gives its selection to this box, whose
+				// menu MyGo draws in the window, in the theme's look. The
+				// view's own menu is the system's, GTK's on Linux.
+				box := ui.Column(c).Selectable().PopoverMenu(func(m *ui.Menu) {
+					m.EditItems()
+					m.Separator()
+					if m.Item("Copy Summary as Markdown").Chosen() {
+						writeClipboardText(current.Summary)
+					}
+				})
+				box.Children(func() {
+					markdown.View(c, current.Summary, &a.mdOpts)
+				})
 			})
 		} else {
 			if a.CodeState != nil {
