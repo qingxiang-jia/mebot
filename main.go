@@ -603,6 +603,74 @@ func (a *App) CopySelectedSummaries() {
 	}
 }
 
+// CanCopySummaries reports whether any article CopySelectedSummaries would
+// copy has a summary.
+func (a *App) CanCopySummaries() bool {
+	if a.ChosenArticles.Len() == 0 {
+		cur := a.CurrentArticle()
+		return cur != nil && !IsSummaryEmpty(cur.Summary)
+	}
+	for idx := range a.ChosenArticles.All() {
+		if idx >= 0 && idx < len(a.Articles) && !IsSummaryEmpty(a.Articles[idx].Summary) {
+			return true
+		}
+	}
+	return false
+}
+
+// SelectAllArticles chooses every article of the project.
+func (a *App) SelectAllArticles() {
+	for i := range a.Articles {
+		a.ChosenArticles.Add(i)
+	}
+	a.SaveProjectSelection()
+}
+
+// ClearArticleSelection chooses no article.
+func (a *App) ClearArticleSelection() {
+	a.ChosenArticles.Clear()
+	a.SaveProjectSelection()
+}
+
+// buildArticleMenu fills the menu of an article in the list, which does what
+// the buttons above the list do, on the articles chosen. Right-clicking a
+// row not chosen chooses it first, as the list does for Finder.
+func (a *App) buildArticleMenu(m *ui.Menu) {
+	count := a.ChosenArticles.Len()
+	if count == 0 {
+		count = 1
+	}
+
+	if m.Item("Copy Titles").Chosen() {
+		a.CopySelectedTitles()
+	}
+	if m.Item("Copy Full Text").Chosen() {
+		a.CopySelectedContents()
+	}
+	if m.Item("Copy Summaries").Disabled(!a.CanCopySummaries()).Chosen() {
+		a.CopySelectedSummaries()
+	}
+
+	m.Separator()
+
+	if m.Item("Select All").Disabled(len(a.Articles) == 0).Chosen() {
+		a.SelectAllArticles()
+	}
+	if m.Item("Clear Selection").Disabled(a.ChosenArticles.Len() == 0).Chosen() {
+		a.ClearArticleSelection()
+	}
+
+	m.Separator()
+
+	del := "Delete Article…"
+	if count > 1 {
+		del = fmt.Sprintf("Delete %d Articles…", count)
+	}
+	if m.Item(del).Chosen() {
+		a.ShowDeleteArticleConfirm = true
+	}
+}
+
 // Native Dialogs: run in goroutines, update UI via win.Update()
 func (a *App) ImportHTMLFiles() {
 	go func() {
@@ -1223,16 +1291,12 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 			if ui.Button(c, "").Tooltip("Select All").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconSelectAll).Size(14, 14)
 			}).Clicked() {
-				for i := 0; i < len(a.Articles); i++ {
-					a.ChosenArticles.Add(i)
-				}
-				a.SaveProjectSelection()
+				a.SelectAllArticles()
 			}
 			if ui.Button(c, "").Tooltip("Clear Selection").Border(1, a.Theme.Border).Radius(6).Children(func() {
 				ui.Icon(c, IconSelectNone).Size(14, 14)
 			}).Clicked() {
-				a.ChosenArticles.Clear()
-				a.SaveProjectSelection()
+				a.ClearArticleSelection()
 			}
 		})
 
@@ -1244,6 +1308,7 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 			if isCurrent {
 				row.Background(a.Theme.ActiveRowBg)
 			}
+			row.PopoverMenu(a.buildArticleMenu)
 
 			row.Children(func() {
 				t := ui.Text(c, art.Title).
