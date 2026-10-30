@@ -3,7 +3,7 @@ module mebot
 go 1.27.3
 
 require (
-	github.com/egoist/mygo v0.7.1
+	github.com/egoist/mygo v0.7.3
 	github.com/markusmobius/go-trafilatura/v2 v2.2.6
 )
 
