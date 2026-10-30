@@ -11,11 +11,18 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/egoist/mygo/netproxy"
 )
 
 const geminiStreamEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse"
 
-var geminiHTTPClient = &http.Client{Timeout: 10 * time.Minute}
+// geminiHTTPClient sends its requests through the proxy the user set in the
+// desktop's settings, as browsers do, with its bypass list and PAC files.
+var geminiHTTPClient = &http.Client{
+	Timeout:   10 * time.Minute,
+	Transport: netproxy.Transport(),
+}
 
 type GeminiStreamResult struct {
 	Thoughts     string
