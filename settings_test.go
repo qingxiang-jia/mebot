@@ -28,6 +28,43 @@ func TestLoadSettingsMigratesLegacyGeminiModel(t *testing.T) {
 	}
 }
 
+// TestLoadSettingsKeepsLegacyModelChosenAfterMigration checks that the
+// migration off the old default runs once: a user who picks that model on
+// purpose keeps it across restarts.
+func TestLoadSettingsKeepsLegacyModelChosenAfterMigration(t *testing.T) {
+	home := t.TempDir()
+	stateHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	stateDir := filepath.Join(stateHome, "mebot")
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy := `{"gemini_model": "gemini-3.8-flash"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "settings.json"), []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first load migrates the old default.
+	first := LoadSettings()
+	if first.GeminiModel != DefaultGeminiModel {
+		t.Fatalf("GeminiModel = %q, want %q", first.GeminiModel, DefaultGeminiModel)
+	}
+
+	// The user then chooses the old model on purpose from Settings.
+	first.GeminiModel = legacyGeminiModel
+	if err := first.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	second := LoadSettings()
+	if second.GeminiModel != legacyGeminiModel {
+		t.Errorf("GeminiModel = %q, want the chosen %q", second.GeminiModel, legacyGeminiModel)
+	}
+}
+
 func TestLoadSettingsBackwardsCompatible(t *testing.T) {
 	home := t.TempDir()
 	stateHome := t.TempDir()

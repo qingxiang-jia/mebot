@@ -32,6 +32,10 @@ type AppSettings struct {
 	GeminiAPIKey string `json:"gemini_api_key"`
 	GeminiModel  string `json:"gemini_model"`
 	GeminiPrompt string `json:"gemini_prompt"`
+
+	// GeminiModelMigrated records that the move off legacyGeminiModel has
+	// been made, so choosing that model on purpose later is kept.
+	GeminiModelMigrated bool `json:"gemini_model_migrated"`
 }
 
 func SettingsFilePath() string {
@@ -56,11 +60,24 @@ func LoadSettings() *AppSettings {
 	if s.ProjectStates == nil {
 		s.ProjectStates = make(map[string]ProjectSelectionState)
 	}
-	if strings.TrimSpace(s.GeminiModel) == "" || s.GeminiModel == legacyGeminiModel {
+	if strings.TrimSpace(s.GeminiModel) == "" {
 		s.GeminiModel = DefaultGeminiModel
+	}
+	// Move the old default off once and remember it, so a user who picks
+	// that model on purpose keeps it across restarts.
+	needsSave := false
+	if !s.GeminiModelMigrated {
+		s.GeminiModelMigrated = true
+		if s.GeminiModel == legacyGeminiModel {
+			s.GeminiModel = DefaultGeminiModel
+			needsSave = err == nil
+		}
 	}
 	if strings.TrimSpace(s.GeminiPrompt) == "" {
 		s.GeminiPrompt = DefaultGeminiPrompt
+	}
+	if needsSave {
+		_ = s.Save()
 	}
 	return s
 }
