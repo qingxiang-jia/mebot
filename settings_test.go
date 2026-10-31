@@ -111,3 +111,26 @@ func TestLoadSettingsBackwardsCompatible(t *testing.T) {
 		t.Errorf("GeminiAPIKey = %q, want empty", settings.GeminiAPIKey)
 	}
 }
+
+func TestSettingsKeepExportDirectory(t *testing.T) {
+	home := t.TempDir()
+	stateHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	settings := LoadSettings()
+	wantDefault := filepath.Join(home, "Documents")
+	if settings.ExportDirectory != wantDefault {
+		t.Fatalf("ExportDirectory = %q, want the default %q", settings.ExportDirectory, wantDefault)
+	}
+
+	chosen := filepath.Join(home, "Exports")
+	settings.ExportDirectory = chosen
+	if err := settings.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := LoadSettings().ExportDirectory; got != chosen {
+		t.Errorf("ExportDirectory = %q, want the saved %q", got, chosen)
+	}
+}

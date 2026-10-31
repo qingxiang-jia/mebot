@@ -154,7 +154,7 @@ func NewApp() *App {
 		Theme:                    theme,
 		IsDarkMode:               settings.IsDarkMode,
 		SelectedDate:             time.Now(),
-		ExportDirectory:          DefaultExportDir(),
+		ExportDirectory:          settings.ExportDirectory,
 		ShowExportModal:          false,
 		ShowDeleteProjectConfirm: false,
 		ShowDeleteArticleConfirm: false,
@@ -761,6 +761,8 @@ func (a *App) BrowseExportDirectory() {
 		if err == nil && len(paths) > 0 {
 			a.win.Update(func() {
 				a.ExportDirectory = paths[0]
+				a.Settings.ExportDirectory = paths[0]
+				_ = a.Settings.Save()
 			})
 		}
 	}()
@@ -782,6 +784,8 @@ func (a *App) PerformExportTo(outPath string) {
 	_ = os.WriteFile(outPath, []byte(md), 0644)
 
 	a.SaveNow()
+	a.Settings.ExportDirectory = a.ExportDirectory
+	_ = a.Settings.Save()
 	a.ShowExportModal = false
 }
 

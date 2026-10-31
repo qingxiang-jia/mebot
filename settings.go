@@ -29,6 +29,9 @@ type AppSettings struct {
 	LastProject   string                           `json:"last_project"`
 	ProjectStates map[string]ProjectSelectionState `json:"project_states"`
 
+	// ExportDirectory is where the weekly rollup was last exported.
+	ExportDirectory string `json:"export_directory"`
+
 	GeminiAPIKey string `json:"gemini_api_key"`
 	GeminiModel  string `json:"gemini_model"`
 	GeminiPrompt string `json:"gemini_prompt"`
@@ -75,6 +78,9 @@ func LoadSettings() *AppSettings {
 	}
 	if strings.TrimSpace(s.GeminiPrompt) == "" {
 		s.GeminiPrompt = DefaultGeminiPrompt
+	}
+	if strings.TrimSpace(s.ExportDirectory) == "" {
+		s.ExportDirectory = DefaultExportDir()
 	}
 	if needsSave {
 		_ = s.Save()
