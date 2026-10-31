@@ -1629,46 +1629,41 @@ func (a *App) renderModals(c *ui.Context) {
 
 	// 7. Settings Modal
 	ui.Modal(c, &a.ShowSettingsModal, func() {
-		ui.Text(c, "Settings").FontSize(16).Bold().TextColor(a.Theme.Text)
+		ui.Column(c).Width(520).Gap(12).Children(func() {
+			ui.Text(c, "Settings").FontSize(16).Bold().TextColor(a.Theme.Text)
 
-		ui.Text(c, "Gemini").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+			ui.Text(c, "API Key").FontSize(11).TextColor(a.Theme.TextMuted)
+			ui.TextInput(c.Key("geminiAPIKeyInput"), &a.SettingsDraftAPIKey).
+				Password().
+				Placeholder("AIza...").
+				Padding(c.Theme().Space(1), c.Theme().Space(2))
 
-		ui.Text(c, "API Key").FontSize(11).TextColor(a.Theme.TextMuted)
-		ui.TextInput(c.Key("geminiAPIKeyInput"), &a.SettingsDraftAPIKey).
-			Password().
-			Placeholder("AIza...").
-			Grow(1)
-		ui.Text(c, "Stored locally in settings.json. You can also set GEMINI_API_KEY.").
-			FontSize(11).TextColor(a.Theme.TextMuted)
+			ui.Text(c, "Model").FontSize(11).TextColor(a.Theme.TextMuted)
+			ui.TextInput(c.Key("geminiModelInput"), &a.SettingsDraftModel).
+				Placeholder(DefaultGeminiModel).
+				Padding(c.Theme().Space(1), c.Theme().Space(2))
 
-		ui.Text(c, "Model").FontSize(11).TextColor(a.Theme.TextMuted)
-		ui.TextInput(c.Key("geminiModelInput"), &a.SettingsDraftModel).
-			Placeholder(DefaultGeminiModel).
-			Grow(1)
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Summary prompt").FontSize(11).TextColor(a.Theme.TextMuted)
+				ui.Spacer(c)
+				if ui.Button(c, "Reset to default").Border(1, a.Theme.Border).Radius(6).Clicked() {
+					a.SettingsDraftPrompt = DefaultGeminiPrompt
+				}
+			})
+			ui.TextArea(c.Key("geminiPromptInput"), &a.SettingsDraftPrompt).
+				Placeholder(DefaultGeminiPrompt).
+				Height(140).
+				Grow(1)
 
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Summary prompt").FontSize(11).TextColor(a.Theme.TextMuted)
-			ui.Spacer(c)
-			if ui.Button(c, "Reset to default").Border(1, a.Theme.Border).Radius(6).Clicked() {
-				a.SettingsDraftPrompt = DefaultGeminiPrompt
-			}
-		})
-		ui.TextArea(c.Key("geminiPromptInput"), &a.SettingsDraftPrompt).
-			Placeholder(DefaultGeminiPrompt).
-			Height(140).
-			Grow(1)
-
-		ui.Text(c, "The free tier has strict limits. One request is sent per Generate click, with no automatic retries. A 503 usually means Gemini is at capacity; retry later or try another model.").
-			FontSize(11).TextColor(a.Theme.TextMuted)
-
-		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-			if ui.Button(c, "Cancel").Clicked() {
-				a.ShowSettingsModal = false
-			}
-			if ui.PrimaryButton(c, "Save Settings").Clicked() {
-				a.SaveSettingsModal()
-				c.Toast("Settings saved")
-			}
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					a.ShowSettingsModal = false
+				}
+				if ui.PrimaryButton(c, "Save Settings").Clicked() {
+					a.SaveSettingsModal()
+					c.Toast("Settings saved")
+				}
+			})
 		})
 	})
 
