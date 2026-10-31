@@ -14,8 +14,8 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/richtext"
 )
 
 type App struct {
@@ -34,8 +34,8 @@ type App struct {
 	SidebarWidth float32
 	ReaderWidth  float32
 
-	CodeState          *editor.State
-	LastBufferText     string
+	SummaryDoc         *richtext.Document
+	LastSummaryText    string
 	ShowMarkdownRender bool
 	mdOpts             markdown.Options
 
@@ -179,7 +179,7 @@ func NewApp() *App {
 		return ""
 	}
 
-	app.initCodeBuffer("")
+	app.initSummaryDoc("")
 
 	if initialProject != "" {
 		app.SwitchProject(initialProject)
@@ -270,14 +270,18 @@ func (a *App) updateActiveProjectIdx() {
 	a.ActiveProjectIdx = 0
 }
 
-func (a *App) initCodeBuffer(source string) {
-	buf := editor.NewBuffer(source)
-	buf.SetLanguage(editor.LanguageFor("summary.md"))
-	a.CodeState = &editor.State{
-		Buffer:   buf,
-		SoftWrap: true,
+func (a *App) initSummaryDoc(source string) {
+	a.SummaryDoc = richtext.NewDocument(richtext.ParseMarkdown(source))
+	// Keep the baseline in the document's canonical Markdown, so the first
+	// edit is compared against what the rich-text editor round-trips.
+	a.LastSummaryText = a.SummaryDoc.Text().Markdown()
+}
+
+func (a *App) currentSummaryMarkdown() string {
+	if a.SummaryDoc == nil {
+		return ""
 	}
-	a.LastBufferText = source
+	return a.SummaryDoc.Text().Markdown()
 }
 
 func (a *App) SelectArticle(newIdx int) {
@@ -286,8 +290,8 @@ func (a *App) SelectArticle(newIdx int) {
 	}
 
 	if a.LastActiveIdx >= 0 && a.LastActiveIdx < len(a.Articles) && a.LastActiveIdx != newIdx {
-		if a.CodeState != nil && !a.ShowMarkdownRender {
-			a.Articles[a.LastActiveIdx].Summary = a.CodeState.Buffer.String()
+		if a.SummaryDoc != nil && !a.ShowMarkdownRender {
+			a.Articles[a.LastActiveIdx].Summary = a.currentSummaryMarkdown()
 		}
 	}
 
@@ -295,7 +299,7 @@ func (a *App) SelectArticle(newIdx int) {
 	a.LastActiveIdx = newIdx
 
 	cur := a.Articles[newIdx]
-	a.initCodeBuffer(cur.Summary)
+	a.initSummaryDoc(cur.Summary)
 
 	if strings.TrimSpace(cur.Summary) != "" {
 		a.ShowMarkdownRender = true
@@ -367,8 +371,8 @@ func (a *App) SaveNow() {
 	}
 
 	cur := a.CurrentArticle()
-	if cur != nil && a.CodeState != nil && !a.ShowMarkdownRender {
-		cur.Summary = a.CodeState.Buffer.String()
+	if cur != nil && a.SummaryDoc != nil && !a.ShowMarkdownRender {
+		cur.Summary = a.currentSummaryMarkdown()
 	}
 
 	if a.ActiveProject != "" {
@@ -491,7 +495,7 @@ func (a *App) DeleteActiveProject() {
 	a.ActiveIdx = 0
 	a.LastActiveIdx = -1
 	a.ChosenArticles.Clear()
-	a.initCodeBuffer("")
+	a.initSummaryDoc("")
 
 	if len(a.Projects) > 0 {
 		a.SwitchProject(a.Projects[0])
@@ -775,8 +779,8 @@ func (a *App) PerformExportTo(outPath string) {
 	}
 
 	cur := a.CurrentArticle()
-	if cur != nil && a.CodeState != nil && !a.ShowMarkdownRender {
-		cur.Summary = a.CodeState.Buffer.String()
+	if cur != nil && a.SummaryDoc != nil && !a.ShowMarkdownRender {
+		cur.Summary = a.currentSummaryMarkdown()
 	}
 
 	md := SerializeToMarkdown(a.Articles)
@@ -869,7 +873,7 @@ func (a *App) applySummaryMatches(matches []ParsedSummaryBlock) []string {
 	// generated summary on the currently selected article.
 	cur := a.CurrentArticle()
 	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
-		a.initCodeBuffer(cur.Summary)
+		a.initSummaryDoc(cur.Summary)
 		a.ShowMarkdownRender = true
 	}
 
@@ -1396,6 +1400,7 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 func (a *App) renderSummaryColumn(c *ui.Context) {
 	current := a.CurrentArticle()
 	ui.Column(c).Fill().Padding(16).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
+		wasPreview := a.ShowMarkdownRender
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "SUMMARY").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
 			ui.Spacer(c)
@@ -1403,6 +1408,12 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			ui.Switch(c.Key("summaryPreviewSwitch"), &a.ShowMarkdownRender).Tooltip("Toggle Markdown Preview")
 			ui.Text(c, "Preview").FontSize(11).TextColor(a.Theme.TextMuted)
 		})
+
+		// Turning the preview on shows what was just typed, which the
+		// rich-text editor holds as runs until it is written back.
+		if a.ShowMarkdownRender && !wasPreview && current != nil && a.SummaryDoc != nil {
+			current.Summary = a.currentSummaryMarkdown()
+		}
 
 		if current == nil {
 			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
@@ -1432,16 +1443,17 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 				})
 			})
 		} else {
-			if a.CodeState != nil {
-				a.CodeState.Font = ui.Font{Size: a.CurrentFontSize()}
-				a.CodeState.Theme = editor.DefaultTheme(c.Theme())
+			if a.SummaryDoc != nil {
+				view := richtext.EditorBase(c.Key(fmt.Sprintf("summaryMarkdownEditor_%d", a.ActiveIdx)), a.SummaryDoc, richtext.EditorOptions{
+					Label:       "Summary",
+					Placeholder: "Write the summary in Markdown...",
+					Font:        ui.Font{Family: a.CurrentFontFamily(), Size: a.CurrentFontSize()},
+				}).Grow(1).FillWidth()
 
-				editor.View(c, a.CodeState).Grow(1).FillWidth()
-
-				if a.CodeState.Buffer.Modified() {
-					latestText := a.CodeState.Buffer.String()
-					if latestText != a.LastBufferText {
-						a.LastBufferText = latestText
+				if view.Changed() {
+					latestText := a.currentSummaryMarkdown()
+					if latestText != a.LastSummaryText {
+						a.LastSummaryText = latestText
 						current.Summary = latestText
 						a.TriggerDebouncedSave()
 					}
