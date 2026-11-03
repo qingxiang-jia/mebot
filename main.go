@@ -1162,7 +1162,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("New Project").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconAdd).Size(14, 14)
+				ui.Image(c, IconAdd).Size(14, 14)
 				ui.Text(c, "New").SingleLine()
 			}).Clicked() {
 			a.ShowNewProjectModal = true
@@ -1173,7 +1173,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 				Tooltip("Rename Current Project").
 				Gap(6).
 				Children(func() {
-					ui.Icon(c, IconEdit).Size(14, 14)
+					ui.Image(c, IconEdit).Size(14, 14)
 					ui.Text(c, "Rename").SingleLine()
 				}).Clicked() {
 				a.RenameProjectName = a.ActiveProject
@@ -1184,7 +1184,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 				Tooltip("Delete Current Project").
 				Gap(6).
 				Children(func() {
-					ui.Icon(c, IconTrash).Size(14, 14)
+					ui.Image(c, IconTrash).Size(14, 14)
 					ui.Text(c, "Delete").SingleLine()
 				}).Clicked() {
 				a.ShowDeleteProjectConfirm = true
@@ -1198,7 +1198,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("Import HTML Article(s)").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconImport).Size(14, 14)
+				ui.Image(c, IconImport).Size(14, 14)
 				ui.Text(c, "Import HTML").SingleLine()
 			}).Clicked() {
 			a.ImportHTMLFiles()
@@ -1208,7 +1208,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("Import Markdown Rollup").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconDocument).Size(14, 14)
+				ui.Image(c, IconDocument).Size(14, 14)
 				ui.Text(c, "Import MD").SingleLine()
 			}).Clicked() {
 			a.ImportMarkdownFile()
@@ -1218,7 +1218,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("Match Pasted Summaries by Title").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconPaste).Size(14, 14)
+				ui.Image(c, IconPaste).Size(14, 14)
 				ui.Text(c, "Match").SingleLine()
 			}).Clicked() {
 			a.OpenBatchSummaryModal()
@@ -1228,7 +1228,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("Generate Missing Summaries with Gemini").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconSparkle).Size(14, 14)
+				ui.Image(c, IconSparkle).Size(14, 14)
 				ui.Text(c, "AI Summary").SingleLine()
 			}).Clicked() {
 			a.OpenAISummaryModal()
@@ -1238,7 +1238,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("Export Weekly Rollup").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconExport).Size(14, 14)
+				ui.Image(c, IconExport).Size(14, 14)
 				ui.Text(c, "Export").SingleLine()
 			}).Clicked() {
 			a.ShowExportModal = true
@@ -1282,7 +1282,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip(themeTip).
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, themeIcon).Size(14, 14)
+				ui.Image(c, themeIcon).Size(14, 14)
 				ui.Text(c, themeText).SingleLine()
 			}).Clicked() {
 			a.ToggleTheme()
@@ -1294,7 +1294,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			Tooltip("Settings").
 			Gap(6).
 			Children(func() {
-				ui.Icon(c, IconSettings).Size(14, 14)
+				ui.Image(c, IconSettings).Size(14, 14)
 				ui.Text(c, "Settings").SingleLine()
 			}).Clicked() {
 			a.OpenSettingsModal()
@@ -1306,24 +1306,24 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 	ui.Column(c).Fill().Padding(8).Gap(8).Background(a.Theme.SidebarBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
 			if ui.Button(c, "").Tooltip("Delete Selected Article(s)").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Icon(c, IconTrash).Size(14, 14)
+				ui.Image(c, IconTrash).Size(14, 14)
 			}).Clicked() {
 				if a.ChosenArticles.Len() > 0 || a.CurrentArticle() != nil {
 					a.ShowDeleteArticleConfirm = true
 				}
 			}
 			if ui.Button(c, "").Tooltip("Copy Selected Titles").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Icon(c, IconCopy).Size(14, 14)
+				ui.Image(c, IconCopy).Size(14, 14)
 			}).Clicked() {
 				a.CopySelectedTitles()
 			}
 			if ui.Button(c, "").Tooltip("Copy Selected Content").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Icon(c, IconPaste).Size(14, 14)
+				ui.Image(c, IconPaste).Size(14, 14)
 			}).Clicked() {
 				a.CopySelectedContents()
 			}
 			if ui.Button(c, "").Tooltip("Copy Selected Summaries").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Icon(c, IconDocument).Size(14, 14)
+				ui.Image(c, IconDocument).Size(14, 14)
 			}).Clicked() {
 				a.CopySelectedSummaries()
 			}
@@ -1331,12 +1331,12 @@ func (a *App) renderArticleListColumn(c *ui.Context) {
 			ui.Spacer(c)
 
 			if ui.Button(c, "").Tooltip("Select All").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Icon(c, IconSelectAll).Size(14, 14)
+				ui.Image(c, IconSelectAll).Size(14, 14)
 			}).Clicked() {
 				a.SelectAllArticles()
 			}
 			if ui.Button(c, "").Tooltip("Clear Selection").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Icon(c, IconSelectNone).Size(14, 14)
+				ui.Image(c, IconSelectNone).Size(14, 14)
 			}).Clicked() {
 				a.ClearArticleSelection()
 			}
