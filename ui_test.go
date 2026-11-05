@@ -2,9 +2,7 @@ package main
 
 import (
 	"slices"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -118,111 +116,81 @@ func TestSummaryPreviewMenuIsDrawn(t *testing.T) {
 	}
 }
 
-// TestAISummaryModalKeepsItsWidthWhileStreaming checks that the running
-// dialog stays at the width it opens with and wraps the streamed text,
-// instead of growing as the text gets longer.
-func TestAISummaryModalKeepsItsWidthWhileStreaming(t *testing.T) {
-	output := strings.Repeat("A summary line with plenty of words that have to wrap at the dialog's width. ", 15)
+// TestAISummaryStreamsIntoSummaryPane checks that the live summary for the
+// current article is drawn in the summary column, without a dialog.
+func TestAISummaryStreamsIntoSummaryPane(t *testing.T) {
 	a := &App{
-		Articles:           []*Article{{Title: "First"}},
-		ShowAISummaryModal: true,
-		AISummaryStep:      1,
-		AISummaryTargets:   []AISummaryTarget{{Index: 0, Article: Article{Title: "First"}}},
-		AISummaryCurrent:   0,
-		AISummaryStatus:    "Summarizing 1 of 1...",
-		AISummaryOutput:    output,
-		AISummaryStartedAt: time.Now(),
-		LocalLLMPhase:      "ready",
-		Settings:           &AppSettings{},
-		Theme:              MacOSLightTheme(),
+		Articles:         []*Article{{Title: "First"}},
+		ActiveIdx:        0,
+		AISummaryArticle: 0,
+		AISummaryRunning: true,
+		AISummaryOutput:  "A live summary is arriving.",
+		LocalLLMPhase:    "ready",
+		Theme:            MacOSLightTheme(),
+		mdOpts:           markdown.Options{ShareSelection: true},
 	}
-	tt := ui.NewTester(func(c *ui.Context) { a.renderModals(c) }, 900, 700)
+	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 700, 400)
 
-	if !tt.HasText("First") || !tt.HasText("PROGRESS") || !tt.HasText("Model: "+DefaultLocalLLMModel) {
-		t.Fatalf("the running dialog does not show the request details: %q", tt.Texts())
+	if !tt.HasText("A live summary is arriving.") {
+		t.Fatalf("the streamed summary is not shown in the summary pane: %q", tt.Texts())
 	}
-	rect, ok := tt.Find(output)
-	if !ok {
-		t.Fatalf("the streamed text is not drawn: %q", tt.Texts())
+	if !tt.HasText("Cancel") {
+		t.Fatalf("the running summary has no cancel button: %q", tt.Texts())
 	}
-	if rect.W > 500 {
-		t.Errorf("the streamed text is %v wide, want at most 500: the dialog grew with it", rect.W)
+
+	if err := tt.Click("Cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if a.AISummaryArticle != -1 || a.AISummaryRunning || a.AISummaryOutput != "" {
+		t.Fatalf("cancelling left the summary running: article %d, running %v, output %q", a.AISummaryArticle, a.AISummaryRunning, a.AISummaryOutput)
 	}
 }
 
-// TestAISummaryModalOffersToStartLocalService checks that the confirm step
-// does not let the user generate summaries until the local service is on.
-func TestAISummaryModalOffersToStartLocalService(t *testing.T) {
+// TestAISummaryButtonDisabledWhenLocalLLMOff checks that the per-article
+// action does nothing while the local model is off.
+func TestAISummaryButtonDisabledWhenLocalLLMOff(t *testing.T) {
 	a := &App{
-		Articles:           []*Article{{Title: "First"}},
-		ShowAISummaryModal: true,
-		AISummaryStep:      0,
-		AISummaryTargets:   []AISummaryTarget{{Index: 0, Article: Article{Title: "First"}}},
+		Articles:           []*Article{{Title: "One", Summary: "hello world"}},
+		ActiveIdx:          0,
+		AISummaryArticle:   -1,
+		ShowMarkdownRender: true,
 		LocalLLMPhase:      "off",
-		Settings:           &AppSettings{SummaryPrompt: DefaultSummaryPrompt},
 		Theme:              MacOSLightTheme(),
+		mdOpts:             markdown.Options{ShareSelection: true},
 	}
-	tt := ui.NewTester(func(c *ui.Context) { a.renderModals(c) }, 900, 700)
+	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 700, 400)
 
-	if !tt.HasText("Turn On Service") {
-		t.Fatalf("the confirm step has no button to start the service: %q", tt.Texts())
+	if !tt.HasText("AI Summary") {
+		t.Fatalf("the summary header has no AI Summary button: %q", tt.Texts())
 	}
-	if tt.HasText("Generate Summaries") {
-		t.Errorf("the generate button is shown while the service is off: %q", tt.Texts())
+	_ = tt.Click("AI Summary")
+	if a.AISummaryError != "" || a.AISummaryArticle != -1 {
+		t.Fatalf("the AI Summary button acted while the local LLM was off: error %q, article %d", a.AISummaryError, a.AISummaryArticle)
 	}
 }
 
-// TestAISummaryModalStopsServiceWhenNoSummariesRemain checks that the
-// service control is still available after every article has a summary, so
-// the model can be turned off instead of being left running.
-func TestAISummaryModalStopsServiceWhenNoSummariesRemain(t *testing.T) {
+// TestToolbarHasLocalLLMButtonInsteadOfAISummary checks where the controls
+// live now: the toolbar powers the local model, and the AI Summary action
+// lives next to the summary preview toggle.
+func TestToolbarHasLocalLLMButtonInsteadOfAISummary(t *testing.T) {
 	a := &App{
-		Articles:           []*Article{{Title: "First", Summary: "Already summarized"}},
-		ShowAISummaryModal: true,
-		AISummaryStep:      0,
-		LocalLLMPhase:      "ready",
-		Settings:           &AppSettings{SummaryPrompt: DefaultSummaryPrompt},
-		Theme:              MacOSLightTheme(),
+		Projects:         []string{"One"},
+		ActiveProjectIdx: 0,
+		AvailableFonts:   []string{"Sans"},
+		SelectedFont:     "Sans",
+		FontPickerText:   "Sans",
+		FontSizeOptions:  []string{"16"},
+		SelectedFontSize: "16",
+		LocalLLMPhase:    "off",
+		Theme:            MacOSLightTheme(),
 	}
-	tt := ui.NewTester(func(c *ui.Context) { a.renderModals(c) }, 900, 700)
+	tt := ui.NewTester(func(c *ui.Context) { a.renderToolbar(c) }, 1600, 60)
 
-	if !tt.HasText("All articles in this project already have a summary.") {
-		t.Fatalf("the no-targets message is not shown: %q", tt.Texts())
+	if !tt.HasText("Local LLM") {
+		t.Fatalf("the toolbar has no local LLM button: %q", tt.Texts())
 	}
-	if !tt.HasText("Turn Off Service") {
-		t.Fatalf("the service cannot be stopped when no summaries remain: %q", tt.Texts())
-	}
-	if tt.HasText("Turn On Service") {
-		t.Errorf("the off button is shown while the service is ready: %q", tt.Texts())
-	}
-}
-
-// TestAISummaryModalShowsProgressAndStreamedSummary checks that the running
-// step reports how many articles are done and shows the live summary.
-func TestAISummaryModalShowsProgressAndStreamedSummary(t *testing.T) {
-	a := &App{
-		Articles:           []*Article{{Title: "First"}, {Title: "Second"}},
-		ShowAISummaryModal: true,
-		AISummaryStep:      1,
-		AISummaryTargets: []AISummaryTarget{
-			{Index: 0, Article: Article{Title: "First"}},
-			{Index: 1, Article: Article{Title: "Second"}},
-		},
-		AISummaryResults:   []AISummaryResult{{Index: 0, Title: "First", Summary: "First summary."}},
-		AISummaryCurrent:   1,
-		AISummaryStatus:    "Summarizing 2 of 2...",
-		AISummaryOutput:    "Second summary is streaming",
-		AISummaryStartedAt: time.Now(),
-		LocalLLMPhase:      "ready",
-		Settings:           &AppSettings{SummaryPrompt: DefaultSummaryPrompt},
-		Theme:              MacOSLightTheme(),
-	}
-	tt := ui.NewTester(func(c *ui.Context) { a.renderModals(c) }, 900, 700)
-
-	for _, want := range []string{"1 of 2 articles summarized", "First summary.", "Second summary is streaming"} {
-		if !tt.HasText(want) {
-			t.Errorf("the running dialog does not show %q: %q", want, tt.Texts())
-		}
+	if tt.HasText("AI Summary") {
+		t.Errorf("the AI Summary action is still in the toolbar: %q", tt.Texts())
 	}
 }
 

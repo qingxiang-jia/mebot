@@ -74,37 +74,20 @@ type App struct {
 	UnmatchedOptions      []string
 	BatchMatchingStep     int
 
-	// Local AI Summary State
-	ShowAISummaryModal bool
-	AISummaryStep      int // 0 = confirm, 1 = running/error, 2 = review
-	AISummaryTargets   []AISummaryTarget
-	AISummaryResults   []AISummaryResult
-	AISummaryCurrent   int
-	AISummaryOutput    string
-	AISummaryStatus    string
-	AISummaryError     string
-	AISummaryWarning   string
-	AISummaryStartedAt time.Time
-	LocalLLMPhase      string // off, checking, starting, ready, stopping, error
-	LocalLLMError      string
-	localLLMRunID      int
-	aiCancel           context.CancelFunc
-	aiRunID            int
+	// Per-article Local AI Summary State
+	AISummaryArticle int // index being summarized, -1 when idle
+	AISummaryRunning bool
+	AISummaryOutput  string
+	AISummaryError   string
+	LocalLLMPhase    string // off, checking, starting, ready, stopping, error
+	LocalLLMError    string
+	localLLMRunID    int
+	aiCancel         context.CancelFunc
+	aiRunID          int
 
 	// Settings Modal State
 	ShowSettingsModal   bool
 	SettingsDraftPrompt string
-}
-
-type AISummaryTarget struct {
-	Index   int
-	Article Article
-}
-
-type AISummaryResult struct {
-	Index   int
-	Title   string
-	Summary string
 }
 
 func NewApp() *App {
@@ -172,9 +155,8 @@ func NewApp() *App {
 		ShowNewProjectModal:      false,
 		ShowRenameProjectModal:   false,
 		ShowBatchSummaryModal:    false,
-		ShowAISummaryModal:       false,
-		AISummaryStep:            0,
-		AISummaryCurrent:         -1,
+		AISummaryArticle:         -1,
+		LocalLLMPhase:            "checking",
 		ShowSettingsModal:        false,
 		// The summary's preview shares its selection with the box around
 		// it, whose menu mygo draws in the window: the view's own is the
@@ -301,6 +283,11 @@ func (a *App) SelectArticle(newIdx int) {
 		return
 	}
 
+	if a.AISummaryRunning && a.AISummaryArticle != newIdx {
+		a.cancelArticleAISummary()
+	}
+	a.AISummaryError = ""
+
 	if a.LastActiveIdx >= 0 && a.LastActiveIdx < len(a.Articles) && a.LastActiveIdx != newIdx {
 		if a.SummaryDoc != nil && !a.ShowMarkdownRender {
 			a.Articles[a.LastActiveIdx].Summary = a.currentSummaryMarkdown()
@@ -399,6 +386,7 @@ func (a *App) SwitchProject(newProject string) {
 	if newProject == "" {
 		return
 	}
+	a.cancelArticleAISummary()
 
 	if a.ActiveProject != "" && a.ActiveProject != newProject && a.IsDirty {
 		_ = SaveProjectState(a.ActiveProject, a.Articles)
@@ -491,6 +479,7 @@ func (a *App) DeleteActiveProject() {
 	if a.ActiveProject == "" {
 		return
 	}
+	a.cancelArticleAISummary()
 
 	target := a.ActiveProject
 	_ = RemoveProjectState(target)
@@ -522,6 +511,7 @@ func (a *App) DeleteActiveProject() {
 }
 
 func (a *App) ConfirmDeleteChosenArticles() {
+	a.cancelArticleAISummary()
 	if a.ChosenArticles.Len() == 0 && a.CurrentArticle() != nil {
 		idx := a.ActiveIdx
 		a.Articles = append(a.Articles[:idx], a.Articles[idx+1:]...)
@@ -903,52 +893,35 @@ func (a *App) updateUI(fn func()) {
 	a.win.Update(fn)
 }
 
-func (a *App) OpenAISummaryModal() {
-	a.cancelAIRequest()
-	a.AISummaryStep = 0
-	a.AISummaryOutput = ""
-	a.AISummaryStatus = ""
-	a.AISummaryError = ""
-	a.AISummaryWarning = ""
-	a.AISummaryTargets = nil
-	a.AISummaryResults = nil
-	a.AISummaryCurrent = -1
-	a.AISummaryStartedAt = time.Time{}
-
-	for i, art := range a.Articles {
-		if IsSummaryEmpty(art.Summary) {
-			a.AISummaryTargets = append(a.AISummaryTargets, AISummaryTarget{
-				Index:   i,
-				Article: *art,
-			})
-		}
-	}
-	a.ShowAISummaryModal = true
-	a.RefreshLocalLLMStatus()
-}
-
-// RefreshLocalLLMStatus checks the local server without blocking the UI.
+// RefreshLocalLLMStatus checks the local server without blocking the UI. It
+// leaves the current phase alone while the service is starting or stopping,
+// so a poll cannot overwrite an explicit action.
 func (a *App) RefreshLocalLLMStatus() {
-	a.localLLMRunID++
-	runID := a.localLLMRunID
-	if a.LocalLLMPhase != "starting" && a.LocalLLMPhase != "stopping" {
-		a.LocalLLMPhase = "checking"
-	}
-	a.LocalLLMError = ""
+	a.updateUI(func() {
+		if a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "stopping" {
+			return
+		}
+		a.localLLMRunID++
+		runID := a.localLLMRunID
 
-	go func() {
-		healthy := LocalLLMHealthy()
-		a.updateUI(func() {
-			if a.localLLMRunID != runID {
-				return
-			}
-			if healthy {
-				a.LocalLLMPhase = "ready"
-			} else if a.LocalLLMPhase == "checking" {
-				a.LocalLLMPhase = "off"
-			}
-		})
-	}()
+		go func() {
+			healthy := LocalLLMHealthy()
+			a.updateUI(func() {
+				if a.localLLMRunID != runID {
+					return
+				}
+				if a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "stopping" {
+					return
+				}
+				if healthy {
+					a.LocalLLMPhase = "ready"
+					a.LocalLLMError = ""
+				} else if a.LocalLLMPhase != "error" {
+					a.LocalLLMPhase = "off"
+				}
+			})
+		}()
+	})
 }
 
 func (a *App) StartLocalLLM() {
@@ -984,6 +957,7 @@ func (a *App) StopLocalLLM() {
 	if a.LocalLLMPhase == "stopping" || a.LocalLLMPhase == "off" {
 		return
 	}
+	a.cancelArticleAISummary()
 	a.localLLMRunID++
 	runID := a.localLLMRunID
 	a.LocalLLMPhase = "stopping"
@@ -1009,116 +983,76 @@ func (a *App) StopLocalLLM() {
 	}()
 }
 
-// renderLocalLLMServicePanel draws the on/off control for the local model.
-// It is shown before the "no articles" early returns so the service can
-// always be stopped after a summary run, even when no missing summaries
-// remain.
-func (a *App) renderLocalLLMServicePanel(c *ui.Context) {
-	ui.Column(c).
-		Padding(10).
-		Radius(6).
-		Background(a.Theme.SidebarBg).
-		Border(1, a.Theme.Border).
-		Gap(8).
+// renderLocalLLMButton is the toolbar power switch. Its icon is green while
+// the local model is running and red while it is off.
+func (a *App) renderLocalLLMButton(c *ui.Context) {
+	color := ui.Hex("#ff3b30")
+	tooltip := "Turn On Local LLM"
+
+	switch a.LocalLLMPhase {
+	case "ready":
+		color = ui.Hex("#34c759")
+		tooltip = "Turn Off Local LLM"
+	case "checking":
+		color = ui.Hex("#ff9f0a")
+		tooltip = "Checking Local LLM status"
+	case "starting":
+		color = ui.Hex("#ff9f0a")
+		tooltip = "Local LLM is starting"
+	case "stopping":
+		color = ui.Hex("#ff9f0a")
+		tooltip = "Local LLM is stopping"
+	case "error":
+		tooltip = "Local LLM error; click to try again"
+	}
+
+	button := ui.Button(c, "").
+		Tooltip(tooltip).
+		Gap(6).
 		Children(func() {
-			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-				ui.Text(c, "Local AI service").FontSize(12).Bold().TextColor(a.Theme.Text)
-				ui.Spacer(c)
-
-				status := "Off"
-				statusColor := a.Theme.TextMuted
-				switch a.LocalLLMPhase {
-				case "checking":
-					status = "Checking..."
-				case "starting":
-					status = "Starting..."
-					statusColor = a.Theme.Accent
-				case "ready":
-					status = "Ready"
-					statusColor = a.Theme.Accent
-				case "stopping":
-					status = "Stopping..."
-				case "error":
-					status = "Error"
-					statusColor = ui.Hex("#ff3b30")
-				}
-				ui.Text(c, status).FontSize(11).Bold().TextColor(statusColor)
-
-				switch a.LocalLLMPhase {
-				case "off", "error":
-					if ui.PrimaryButton(c, "Turn On Service").Clicked() {
-						a.StartLocalLLM()
-					}
-				case "ready":
-					if ui.Button(c, "Turn Off Service").Clicked() {
-						a.StopLocalLLM()
-					}
-				case "checking", "starting", "stopping":
-					ui.Spinner(c)
-				}
-			})
-
-			ui.Text(c, DefaultLocalLLMModel+" • "+LocalLLMBaseURL).
-				FontSize(11).TextColor(a.Theme.TextMuted)
-
-			if a.LocalLLMError != "" {
-				ui.Text(c, a.LocalLLMError).FontSize(11).TextColor(ui.Hex("#ff3b30"))
-			}
-			if a.LocalLLMPhase != "ready" {
-				ui.Text(c, "The local model uses several GB of VRAM while it is running.").
-					FontSize(11).TextColor(a.Theme.TextMuted)
-			}
+			ui.Icon(c, IconPower).Size(14, 14).TextColor(color)
+			ui.Text(c, "Local LLM").SingleLine()
 		})
-}
 
-// formatElapsed shows a wait for people reading it, in seconds under a
-// minute and in minutes and seconds past it.
-func formatElapsed(d time.Duration) string {
-	if d < 0 {
-		d = 0
+	if !button.Clicked() {
+		return
 	}
-	secs := int(d.Round(time.Second) / time.Second)
-	if secs < 60 {
-		return fmt.Sprintf("%ds", secs)
+	switch a.LocalLLMPhase {
+	case "ready":
+		a.StopLocalLLM()
+	case "checking", "starting", "stopping":
+		// The running action will settle the state.
+	default:
+		a.StartLocalLLM()
 	}
-	mins := secs / 60
-	secs -= mins * 60
-	if mins < 60 {
-		return fmt.Sprintf("%dm %02ds", mins, secs)
-	}
-	hours := mins / 60
-	mins -= hours * 60
-	return fmt.Sprintf("%dh %02dm", hours, mins)
 }
 
 func (a *App) StartAISummary() {
 	if a.aiCancel != nil {
 		return
 	}
-	if len(a.AISummaryTargets) == 0 {
-		a.AISummaryError = "There are no articles without a summary."
+	target := a.CurrentArticle()
+	if target == nil {
 		return
 	}
 	if a.LocalLLMPhase != "ready" {
-		a.AISummaryError = "Turn on the local AI service first."
+		a.AISummaryError = "Turn on the local LLM first."
 		return
 	}
 
-	a.AISummaryStep = 1
-	a.AISummaryError = ""
-	a.AISummaryWarning = ""
+	targetIndex := a.ActiveIdx
+	targetTitle := target.Title
+	a.AISummaryArticle = targetIndex
+	a.AISummaryRunning = true
 	a.AISummaryOutput = ""
-	a.AISummaryStatus = "Connecting to the local AI service..."
-	a.AISummaryResults = nil
-	a.AISummaryCurrent = -1
-	a.AISummaryStartedAt = time.Now()
+	a.AISummaryError = ""
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.aiCancel = cancel
 	a.aiRunID++
 	runID := a.aiRunID
 
-	targets := append([]AISummaryTarget(nil), a.AISummaryTargets...)
+	prompt := BuildSummaryPrompt(a.Settings.SummaryPrompt, []Article{*target})
 	go func() {
 		if !LocalLLMHealthy() {
 			a.updateUI(func() {
@@ -1126,101 +1060,64 @@ func (a *App) StartAISummary() {
 					return
 				}
 				a.aiCancel = nil
-				a.AISummaryStatus = ""
-				a.AISummaryError = "The local AI service is not running. Turn it on, then retry."
+				a.AISummaryArticle = -1
+				a.AISummaryRunning = false
+				a.AISummaryOutput = ""
+				a.AISummaryError = "The local LLM is not running. Turn it on first."
 				a.LocalLLMPhase = "off"
 			})
 			return
 		}
 
-		total := len(targets)
-		for i, target := range targets {
-			if ctx.Err() != nil {
+		var answer strings.Builder
+		var lastFlush time.Time
+
+		onText := func(chunk string) {
+			answer.WriteString(chunk)
+			if time.Since(lastFlush) < 100*time.Millisecond {
 				return
 			}
-
+			lastFlush = time.Now()
+			live := liveSummaryText(answer.String())
 			a.updateUI(func() {
 				if a.aiRunID != runID {
 					return
 				}
-				a.AISummaryCurrent = i
+				a.AISummaryOutput = live
+			})
+		}
+
+		result, err := StreamLocalSummary(ctx, prompt, onText)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				return
+			}
+			a.updateUI(func() {
+				if a.aiRunID != runID {
+					return
+				}
+				a.aiCancel = nil
+				a.AISummaryArticle = -1
+				a.AISummaryRunning = false
 				a.AISummaryOutput = ""
-				a.AISummaryStatus = fmt.Sprintf("Summarizing %d of %d...", i+1, total)
+				a.AISummaryError = fmt.Sprintf("Could not summarize %q: %s", targetTitle, err)
 			})
+			return
+		}
 
-			prompt := BuildSummaryPrompt(a.Settings.SummaryPrompt, []Article{target.Article})
-			var answer strings.Builder
-			var lastFlush time.Time
-
-			onText := func(chunk string) {
-				answer.WriteString(chunk)
-				if time.Since(lastFlush) < 100*time.Millisecond {
-					return
-				}
-				lastFlush = time.Now()
-				snapshot := answer.String()
-				a.updateUI(func() {
-					if a.aiRunID != runID {
-						return
-					}
-					a.AISummaryOutput = snapshot
-				})
-			}
-
-			result, err := StreamLocalSummary(ctx, prompt, onText)
-			if err != nil {
-				if ctx.Err() == context.Canceled {
-					a.updateUI(func() {
-						if a.aiRunID != runID {
-							return
-						}
-						a.aiCancel = nil
-						a.CancelAISummary()
-					})
-					return
-				}
-				partial := result.Answer
-				articleTitle := target.Article.Title
-				a.updateUI(func() {
-					if a.aiRunID != runID {
-						return
-					}
-					a.aiCancel = nil
-					a.AISummaryStatus = ""
-					a.AISummaryOutput = partial
-					a.AISummaryError = fmt.Sprintf("Could not summarize %q: %s", articleTitle, err)
-				})
-				return
-			}
-
-			summary := summaryFromAnswer(result.Answer)
-			if strings.TrimSpace(summary) == "" {
-				articleTitle := target.Article.Title
-				a.updateUI(func() {
-					if a.aiRunID != runID {
-						return
-					}
-					a.aiCancel = nil
-					a.AISummaryStatus = ""
-					a.AISummaryOutput = result.Answer
-					a.AISummaryError = fmt.Sprintf("The local AI returned no summary for %q.", articleTitle)
-				})
-				return
-			}
-
+		summary := summaryFromAnswer(result.Answer)
+		if strings.TrimSpace(summary) == "" {
 			a.updateUI(func() {
 				if a.aiRunID != runID {
 					return
 				}
-				a.AISummaryResults = append(a.AISummaryResults, AISummaryResult{
-					Index:   target.Index,
-					Title:   target.Article.Title,
-					Summary: summary,
-				})
-				if result.FinishReason == "length" {
-					a.AISummaryWarning = "One or more summaries hit the model's output limit and may be incomplete."
-				}
+				a.aiCancel = nil
+				a.AISummaryArticle = -1
+				a.AISummaryRunning = false
+				a.AISummaryOutput = ""
+				a.AISummaryError = fmt.Sprintf("The local LLM returned no summary for %q.", targetTitle)
 			})
+			return
 		}
 
 		a.updateUI(func() {
@@ -1228,10 +1125,31 @@ func (a *App) StartAISummary() {
 				return
 			}
 			a.aiCancel = nil
-			a.AISummaryStatus = ""
-			a.AISummaryCurrent = -1
+			a.AISummaryArticle = -1
+			a.AISummaryRunning = false
 			a.AISummaryOutput = ""
-			a.AISummaryStep = 2
+			a.AISummaryError = ""
+
+			// Only write the summary if this article is still part of the
+			// active project. Switching projects replaces the slice, so a
+			// stale index must not touch the new project's articles.
+			idx := -1
+			for i, article := range a.Articles {
+				if article == target {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				return
+			}
+
+			target.Summary = summary
+			if a.ActiveIdx == idx {
+				a.initSummaryDoc(summary)
+				a.ShowMarkdownRender = true
+			}
+			a.SaveNow()
 		})
 	}()
 }
@@ -1244,50 +1162,17 @@ func (a *App) cancelAIRequest() {
 	a.aiRunID++
 }
 
-func (a *App) CancelAISummary() {
+// cancelArticleAISummary stops an in-flight per-article summary. Any partial
+// text is discarded and the article keeps its previous summary.
+func (a *App) cancelArticleAISummary() {
+	wasRunning := a.aiCancel != nil || a.AISummaryRunning
 	a.cancelAIRequest()
-	a.AISummaryStep = 0
-	a.AISummaryStatus = ""
+	if !wasRunning {
+		return
+	}
+	a.AISummaryArticle = -1
+	a.AISummaryRunning = false
 	a.AISummaryOutput = ""
-	a.AISummaryError = ""
-	a.AISummaryWarning = ""
-	a.AISummaryTargets = nil
-	a.AISummaryResults = nil
-	a.AISummaryCurrent = -1
-	a.AISummaryStartedAt = time.Time{}
-}
-
-func (a *App) CloseAISummaryModal() {
-	a.cancelAIRequest()
-	a.ShowAISummaryModal = false
-}
-
-// applyAISummaryResults writes each generated summary to the article it was
-// generated for. The per-article target indices keep duplicate titles from
-// being matched to the wrong article.
-func (a *App) applyAISummaryResults() []string {
-	var applied []string
-	for _, result := range a.AISummaryResults {
-		if result.Index < 0 || result.Index >= len(a.Articles) {
-			continue
-		}
-		if strings.TrimSpace(result.Summary) == "" {
-			continue
-		}
-		a.Articles[result.Index].Summary = result.Summary
-		applied = append(applied, a.Articles[result.Index].Title)
-	}
-
-	// Keep the editor buffer in sync so SaveNow cannot overwrite a freshly
-	// generated summary on the currently selected article.
-	cur := a.CurrentArticle()
-	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
-		a.initSummaryDoc(cur.Summary)
-		a.ShowMarkdownRender = true
-	}
-
-	a.SaveNow()
-	return applied
 }
 
 // ---------------- Settings ----------------
@@ -1309,11 +1194,6 @@ func (a *App) SaveSettingsModal() {
 // ---------------- UI VIEW ----------------
 
 func (a *App) View(c *ui.Context) {
-	// Closing the AI modal (backdrop or Escape) also cancels an in-flight request.
-	if !a.ShowAISummaryModal && a.aiCancel != nil {
-		a.cancelAIRequest()
-	}
-
 	// Sync accent across all native widgets
 	t := *c.Theme()
 	t.Accent = a.Theme.ActiveRowBg
@@ -1427,15 +1307,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 			a.OpenBatchSummaryModal()
 		}
 
-		if ui.Button(c, "").
-			Tooltip("Generate Missing Summaries with Local AI").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconSparkle).Size(14, 14)
-				ui.Text(c, "AI Summary").SingleLine()
-			}).Clicked() {
-			a.OpenAISummaryModal()
-		}
+		a.renderLocalLLMButton(c)
 
 		if ui.Button(c, "").
 			Tooltip("Export Weekly Rollup").
@@ -1602,6 +1474,7 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 
 func (a *App) renderSummaryColumn(c *ui.Context) {
 	current := a.CurrentArticle()
+	running := a.AISummaryRunning && current != nil && a.AISummaryArticle == a.ActiveIdx
 	ui.Column(c).Fill().Padding(16).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 		wasPreview := a.ShowMarkdownRender
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -1610,7 +1483,40 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 
 			ui.Switch(c.Key("summaryPreviewSwitch"), &a.ShowMarkdownRender).Tooltip("Toggle Markdown Preview")
 			ui.Text(c, "Preview").FontSize(11).TextColor(a.Theme.TextMuted)
+
+			if running {
+				ui.Spinner(c)
+			}
+
+			aiTip := "Generate a summary for this article with Local AI"
+			if a.LocalLLMPhase != "ready" {
+				aiTip = "Turn on Local LLM to generate summaries"
+			} else if current == nil {
+				aiTip = "Select an article to summarize"
+			} else if running {
+				aiTip = "Summarizing this article..."
+			}
+			if ui.Button(c, "").
+				Tooltip(aiTip).
+				Disabled(a.LocalLLMPhase != "ready" || current == nil || running).
+				Gap(6).
+				Children(func() {
+					ui.Image(c, IconSparkle).Size(14, 14)
+					ui.Text(c, "AI Summary").SingleLine()
+				}).Clicked() {
+				a.StartAISummary()
+			}
+
+			if running {
+				if ui.Button(c, "Cancel").Border(1, a.Theme.Border).Radius(6).Clicked() {
+					a.cancelArticleAISummary()
+				}
+			}
 		})
+
+		if a.AISummaryError != "" {
+			ui.Text(c, a.AISummaryError).FontSize(11).TextColor(ui.Hex("#ff3b30"))
+		}
 
 		// Turning the preview on shows what was just typed, which the
 		// rich-text editor holds as runs until it is written back.
@@ -1629,7 +1535,17 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 		a.mdOpts.Theme.Font = a.CurrentFontFamily()
 		a.mdOpts.Theme.FontSize = a.CurrentFontSize()
 
-		if a.ShowMarkdownRender {
+		if running {
+			ui.Scroll(c).Grow(1).Children(func() {
+				if strings.TrimSpace(a.AISummaryOutput) == "" {
+					ui.Text(c, "Waiting for the local LLM...").
+						FontSize(a.CurrentFontSize()).
+						TextColor(a.Theme.TextMuted)
+					return
+				}
+				markdown.View(c, a.AISummaryOutput, &a.mdOpts)
+			})
+		} else if a.ShowMarkdownRender {
 			ui.Scroll(c).Grow(1).Children(func() {
 				// The markdown view gives its selection to this box, whose
 				// menu MyGo draws in the window, in the theme's look. The
@@ -1879,276 +1795,6 @@ func (a *App) renderModals(c *ui.Context) {
 		})
 	})
 
-	// 8. Local AI Summary Modal
-	ui.Modal(c, &a.ShowAISummaryModal, func() {
-		switch a.AISummaryStep {
-		case 0:
-			ui.Row(c).FillWidth().MinWidth(480).Gap(16).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Generate Missing Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
-				ui.Spacer(c)
-				ui.Box(c).Width(16)
-				if ui.Button(c, "Settings").Clicked() {
-					a.CloseAISummaryModal()
-					a.OpenSettingsModal()
-				}
-			})
-
-			if len(a.Articles) == 0 {
-				a.renderLocalLLMServicePanel(c)
-				ui.Text(c, "This project has no articles.").FontSize(12).TextColor(a.Theme.TextMuted)
-				ui.Row(c).Justify(ui.End).Children(func() {
-					if ui.Button(c, "Close").Clicked() {
-						a.CloseAISummaryModal()
-					}
-				})
-				return
-			}
-
-			if len(a.AISummaryTargets) == 0 {
-				a.renderLocalLLMServicePanel(c)
-				ui.Text(c, "All articles in this project already have a summary.").
-					FontSize(12).TextColor(a.Theme.TextMuted)
-				ui.Row(c).Justify(ui.End).Children(func() {
-					if ui.Button(c, "Close").Clicked() {
-						a.CloseAISummaryModal()
-					}
-				})
-				return
-			}
-
-			ui.Text(c, fmt.Sprintf("%d article(s) have no summary yet. Each article is sent to the local model one at a time.",
-				len(a.AISummaryTargets))).FontSize(12).TextColor(a.Theme.TextMuted)
-			ui.Text(c, "Model: "+DefaultLocalLLMModel+" • Thinking off • One article per request").
-				FontSize(11).TextColor(a.Theme.TextMuted)
-
-			a.renderLocalLLMServicePanel(c)
-
-			ui.Text(c, "ARTICLES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-			ui.Scroll(c).Height(160).Children(func() {
-				ui.Column(c).Gap(4).AlignItems(ui.Stretch).Children(func() {
-					for _, target := range a.AISummaryTargets {
-						ui.Text(c, "• "+target.Article.Title).FontSize(12).TextColor(a.Theme.Text).SingleLine()
-					}
-				})
-			})
-
-			if a.AISummaryError != "" {
-				ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-			}
-
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
-					a.CloseAISummaryModal()
-				}
-				if a.LocalLLMPhase == "ready" {
-					if ui.PrimaryButton(c, "Generate Summaries").Clicked() {
-						a.StartAISummary()
-					}
-				} else {
-					ui.Text(c, "Turn on the service to generate.").
-						FontSize(11).TextColor(a.Theme.TextMuted)
-				}
-			})
-
-		case 1:
-			// The column's fixed width keeps the dialog from growing as the
-			// streamed text gets longer: the text wraps at this width instead.
-			ui.Column(c).Width(480).Gap(12).Children(func() {
-				ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-					if a.AISummaryError == "" && a.AISummaryStatus != "" {
-						ui.Spinner(c)
-					}
-					ui.Text(c, "Local AI Summary").FontSize(16).Bold().TextColor(a.Theme.Text)
-					ui.Spacer(c)
-					if a.AISummaryStatus != "" {
-						ui.Text(c, a.AISummaryStatus).FontSize(11).TextColor(a.Theme.TextMuted)
-					}
-				})
-
-				ui.Column(c).
-					Padding(10).
-					Radius(6).
-					Background(a.Theme.SidebarBg).
-					Border(1, a.Theme.Border).
-					Gap(4).
-					Children(func() {
-						ui.Text(c, "PROGRESS").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-						ui.Text(c, fmt.Sprintf("%d of %d articles summarized",
-							len(a.AISummaryResults), len(a.AISummaryTargets))).
-							FontSize(12).Bold().TextColor(a.Theme.Text)
-						if !a.AISummaryStartedAt.IsZero() && a.AISummaryError == "" {
-							ui.Text(c, "Elapsed: "+formatElapsed(time.Since(a.AISummaryStartedAt))).
-								FontSize(11).TextColor(a.Theme.TextMuted)
-						}
-						ui.Text(c, "Model: "+DefaultLocalLLMModel+" • Thinking off • One article per request").
-							FontSize(11).TextColor(a.Theme.TextMuted)
-					})
-
-				ui.Scroll(c).Grow(1).Height(320).Children(func() {
-					ui.Column(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
-						for i, target := range a.AISummaryTargets {
-							completed := i < len(a.AISummaryResults)
-							running := i == a.AISummaryCurrent && a.AISummaryError == ""
-							failed := i == a.AISummaryCurrent && a.AISummaryError != ""
-
-							label := "Waiting"
-							labelColor := a.Theme.TextMuted
-							if completed {
-								label = "Done"
-								labelColor = a.Theme.Accent
-							} else if running {
-								label = "Summarizing..."
-								labelColor = a.Theme.Accent
-							} else if failed {
-								label = "Failed"
-								labelColor = ui.Hex("#ff3b30")
-							}
-
-							ui.Column(c).
-								Padding(8).
-								Radius(6).
-								Background(a.Theme.SidebarBg).
-								Border(1, a.Theme.Border).
-								Gap(4).
-								Children(func() {
-									ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-										ui.Text(c, "• "+target.Article.Title).
-											FontSize(12).Bold().TextColor(a.Theme.Text).SingleLine()
-										ui.Spacer(c)
-										ui.Text(c, label).FontSize(11).TextColor(labelColor)
-									})
-
-									if completed {
-										ui.Text(c, tailRunes(a.AISummaryResults[i].Summary, 1200)).
-											FontSize(12).TextColor(a.Theme.Text)
-									} else if running {
-										text := a.AISummaryOutput
-										if strings.TrimSpace(text) == "" {
-											text = "Waiting for the first words..."
-										}
-										ui.Text(c, tailRunes(text, 2000)).
-											FontSize(12).TextColor(a.Theme.Text)
-									}
-								})
-						}
-					})
-				})
-
-				if a.AISummaryError != "" {
-					ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-					ui.Text(c, "The completed summaries are kept; retry starts over.").
-						FontSize(11).TextColor(a.Theme.TextMuted)
-				}
-
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-					if a.AISummaryError == "" {
-						if ui.Button(c, "Cancel").Clicked() {
-							a.CancelAISummary()
-						}
-					} else {
-						switch a.LocalLLMPhase {
-						case "starting", "checking", "stopping":
-							ui.Spinner(c)
-						case "ready":
-							// The Retry button below becomes available.
-						default:
-							if ui.PrimaryButton(c, "Turn On Service").Clicked() {
-								a.StartLocalLLM()
-							}
-						}
-						if ui.Button(c, "Back").Clicked() {
-							a.AISummaryStep = 0
-							a.AISummaryError = ""
-							a.AISummaryResults = nil
-							a.AISummaryCurrent = -1
-							a.AISummaryOutput = ""
-						}
-						if a.LocalLLMPhase == "ready" {
-							if ui.PrimaryButton(c, "Retry").Clicked() {
-								a.StartAISummary()
-							}
-						}
-					}
-				})
-			})
-
-		case 2:
-			ui.Row(c).FillWidth().MinWidth(480).Gap(16).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Review AI Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
-				ui.Spacer(c)
-				switch a.LocalLLMPhase {
-				case "ready":
-					if ui.Button(c, "Turn Off Service").Clicked() {
-						a.StopLocalLLM()
-					}
-				case "starting", "checking", "stopping":
-					ui.Spinner(c)
-				}
-				if ui.Button(c, "Back").Clicked() {
-					a.AISummaryStep = 0
-					a.AISummaryError = ""
-					a.AISummaryWarning = ""
-					a.AISummaryResults = nil
-					a.AISummaryCurrent = -1
-					a.AISummaryOutput = ""
-				}
-			})
-
-			ui.Text(c, fmt.Sprintf("%d of %d articles summarized with %s.",
-				len(a.AISummaryResults), len(a.AISummaryTargets), DefaultLocalLLMModel)).
-				FontSize(12).TextColor(a.Theme.TextMuted)
-
-			if a.AISummaryWarning != "" {
-				ui.Text(c, a.AISummaryWarning).FontSize(11).TextColor(ui.Hex("#b26a00"))
-			}
-
-			ui.Scroll(c).Grow(1).Children(func() {
-				ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
-					for i := range a.AISummaryResults {
-						item := &a.AISummaryResults[i]
-
-						ui.Column(c).
-							Padding(10).
-							Radius(6).
-							Background(a.Theme.SidebarBg).
-							Border(1, a.Theme.Border).
-							Gap(6).
-							Children(func() {
-								ui.Text(c, item.Title).
-									FontSize(13).Bold().TextColor(a.Theme.Text)
-
-								excerpt := item.Summary
-								if len([]rune(excerpt)) > 240 {
-									excerpt = string([]rune(excerpt)[:240]) + "..."
-								}
-								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
-							})
-					}
-				})
-			})
-
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
-					a.CloseAISummaryModal()
-				}
-				if len(a.AISummaryResults) > 0 {
-					if ui.PrimaryButton(c, "Save Summaries").Clicked() {
-						applied := a.applyAISummaryResults()
-						a.ShowAISummaryModal = false
-						a.AISummaryStep = 0
-						switch len(applied) {
-						case 0:
-							c.Toast("No summaries were saved")
-						case 1:
-							c.Toast("Saved summary for 1 article")
-						default:
-							c.Toast(fmt.Sprintf("Saved summaries for %d articles", len(applied)))
-						}
-					}
-				}
-			})
-		}
-	})
 }
 
 func main() {
@@ -2165,6 +1811,17 @@ func main() {
 			Content: ui.View(app.View),
 		})
 		app.win = win
+		app.RefreshLocalLLMStatus()
+
+		// Keep the toolbar's power indicator in step with the service. The
+		// server can shut itself down after its idle timeout.
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				app.RefreshLocalLLMStatus()
+			}
+		}()
 	})
 
 	if err := mygo.App.Run(); err != nil {

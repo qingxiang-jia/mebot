@@ -119,6 +119,28 @@ func TestSummaryFromAnswerExtractsBody(t *testing.T) {
 	}
 }
 
+func TestLiveSummaryTextHidesTitleHeading(t *testing.T) {
+	cases := map[string]string{
+		"## Solar panels":                 "",
+		"## Solar panels\n":               "",
+		"## Solar panels\nSolar":          "Solar",
+		"## Solar panels\n\nPrices fell.": "Prices fell.",
+		"Prices fell.":                    "Prices fell.",
+		"```markdown\n## Title\nBody":     "Body",
+	}
+	for in, want := range cases {
+		if got := liveSummaryText(in); got != want {
+			t.Errorf("liveSummaryText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLocalQwenProfileUses9b(t *testing.T) {
+	if DefaultLocalLLMModel != "Qwen3.5-9B" {
+		t.Fatalf("DefaultLocalLLMModel = %q, want the 9B model", DefaultLocalLLMModel)
+	}
+}
+
 func TestStripCodeFences(t *testing.T) {
 	wrapped := "```markdown\n## Title\nSummary\n```"
 	got := stripCodeFences(wrapped)

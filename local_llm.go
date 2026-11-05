@@ -292,6 +292,32 @@ func summaryFromAnswer(answer string) string {
 	return strings.TrimSpace(answer)
 }
 
+// liveSummaryText trims the leading Markdown heading from a partially
+// streamed response, so the live preview shows the summary body rather than
+// briefly flashing the article title. An incomplete heading shows nothing
+// until its newline arrives.
+func liveSummaryText(partial string) string {
+	s := strings.TrimLeft(partial, " \t\r\n")
+	for i := 0; i < 2; i++ {
+		if strings.HasPrefix(s, "```") {
+			if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+				s = strings.TrimLeft(s[nl+1:], " \t\r\n")
+				continue
+			}
+			return ""
+		}
+		if strings.HasPrefix(s, "#") {
+			if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+				s = strings.TrimLeft(s[nl+1:], " \t\r\n")
+				continue
+			}
+			return ""
+		}
+		break
+	}
+	return s
+}
+
 // localQwenCLI returns the qwen launcher that starts and stops the server.
 // It prefers the copy on PATH and falls back to the standard install folder.
 func localQwenCLI() string {

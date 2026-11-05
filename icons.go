@@ -60,6 +60,9 @@ var (
 	// status: starred (AI summary)
 	IconSparkle = mustIcon("sparkle.svg")
 
+	// actions: system-shutdown (local LLM power)
+	IconPower = mustIcon("power.svg")
+
 	// categories: preferences-system (Settings)
 	IconSettings = mustIcon("settings.svg")
 )
