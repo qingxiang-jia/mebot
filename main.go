@@ -74,26 +74,37 @@ type App struct {
 	UnmatchedOptions      []string
 	BatchMatchingStep     int
 
-	// Gemini AI Summary State
+	// Local AI Summary State
 	ShowAISummaryModal bool
 	AISummaryStep      int // 0 = confirm, 1 = running/error, 2 = review
-	AISummaryTargets   []Article
-	AISummaryThinking  string
+	AISummaryTargets   []AISummaryTarget
+	AISummaryResults   []AISummaryResult
+	AISummaryCurrent   int
 	AISummaryOutput    string
 	AISummaryStatus    string
 	AISummaryError     string
 	AISummaryWarning   string
-	AISummaryMatches   []ParsedSummaryBlock
-	AISummaryOptions   []string
 	AISummaryStartedAt time.Time
+	LocalLLMPhase      string // off, checking, starting, ready, stopping, error
+	LocalLLMError      string
+	localLLMRunID      int
 	aiCancel           context.CancelFunc
 	aiRunID            int
 
 	// Settings Modal State
 	ShowSettingsModal   bool
-	SettingsDraftAPIKey string
-	SettingsDraftModel  string
 	SettingsDraftPrompt string
+}
+
+type AISummaryTarget struct {
+	Index   int
+	Article Article
+}
+
+type AISummaryResult struct {
+	Index   int
+	Title   string
+	Summary string
 }
 
 func NewApp() *App {
@@ -163,6 +174,7 @@ func NewApp() *App {
 		ShowBatchSummaryModal:    false,
 		ShowAISummaryModal:       false,
 		AISummaryStep:            0,
+		AISummaryCurrent:         -1,
 		ShowSettingsModal:        false,
 		// The summary's preview shares its selection with the box around
 		// it, whose menu mygo draws in the window: the view's own is the
@@ -542,8 +554,8 @@ func (a *App) ConfirmDeleteChosenArticles() {
 
 // writeClipboardText puts plain text on the clipboard. golang.design/x/clipboard
 // advertised "image/png" next to the text target even for text-only writes, so
-// Gemini and AI Studio pasted the text as a broken image. MyGo's clipboard only
-// offers the text representations it was given.
+// web apps pasted the text as a broken image. MyGo's clipboard only offers the
+// text representations it was given.
 func writeClipboardText(text string) {
 	mygo.Clipboard.WriteText(text)
 }
@@ -881,45 +893,182 @@ func (a *App) applySummaryMatches(matches []ParsedSummaryBlock) []string {
 	return applied
 }
 
-// ---------------- Gemini AI Summary ----------------
+// ---------------- Local AI Summary ----------------
+
+func (a *App) updateUI(fn func()) {
+	if a.win == nil {
+		fn()
+		return
+	}
+	a.win.Update(fn)
+}
 
 func (a *App) OpenAISummaryModal() {
 	a.cancelAIRequest()
 	a.AISummaryStep = 0
-	a.AISummaryThinking = ""
 	a.AISummaryOutput = ""
 	a.AISummaryStatus = ""
 	a.AISummaryError = ""
 	a.AISummaryWarning = ""
-	a.AISummaryMatches = nil
-	a.AISummaryOptions = nil
 	a.AISummaryTargets = nil
+	a.AISummaryResults = nil
+	a.AISummaryCurrent = -1
 	a.AISummaryStartedAt = time.Time{}
 
-	for _, art := range a.Articles {
+	for i, art := range a.Articles {
 		if IsSummaryEmpty(art.Summary) {
-			a.AISummaryTargets = append(a.AISummaryTargets, *art)
+			a.AISummaryTargets = append(a.AISummaryTargets, AISummaryTarget{
+				Index:   i,
+				Article: *art,
+			})
 		}
 	}
 	a.ShowAISummaryModal = true
+	a.RefreshLocalLLMStatus()
 }
 
-func (a *App) geminiAPIKey() string {
-	key := strings.TrimSpace(a.Settings.GeminiAPIKey)
-	if key == "" {
-		key = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+// RefreshLocalLLMStatus checks the local server without blocking the UI.
+func (a *App) RefreshLocalLLMStatus() {
+	a.localLLMRunID++
+	runID := a.localLLMRunID
+	if a.LocalLLMPhase != "starting" && a.LocalLLMPhase != "stopping" {
+		a.LocalLLMPhase = "checking"
 	}
-	return key
+	a.LocalLLMError = ""
+
+	go func() {
+		healthy := LocalLLMHealthy()
+		a.updateUI(func() {
+			if a.localLLMRunID != runID {
+				return
+			}
+			if healthy {
+				a.LocalLLMPhase = "ready"
+			} else if a.LocalLLMPhase == "checking" {
+				a.LocalLLMPhase = "off"
+			}
+		})
+	}()
 }
 
-// aiSummaryModel is the model the AI summary will use, with the default
-// filled in for an empty setting.
-func (a *App) aiSummaryModel() string {
-	model := strings.TrimSpace(a.Settings.GeminiModel)
-	if model == "" {
-		return DefaultGeminiModel
+func (a *App) StartLocalLLM() {
+	if a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "ready" {
+		return
 	}
-	return model
+	a.localLLMRunID++
+	runID := a.localLLMRunID
+	a.LocalLLMPhase = "starting"
+	a.LocalLLMError = ""
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), localLLMStartTimeout)
+		defer cancel()
+		err := StartLocalLLMService(ctx)
+
+		a.updateUI(func() {
+			if a.localLLMRunID != runID {
+				return
+			}
+			if err != nil {
+				a.LocalLLMPhase = "error"
+				a.LocalLLMError = err.Error()
+				return
+			}
+			a.LocalLLMPhase = "ready"
+			a.LocalLLMError = ""
+		})
+	}()
+}
+
+func (a *App) StopLocalLLM() {
+	if a.LocalLLMPhase == "stopping" || a.LocalLLMPhase == "off" {
+		return
+	}
+	a.localLLMRunID++
+	runID := a.localLLMRunID
+	a.LocalLLMPhase = "stopping"
+	a.LocalLLMError = ""
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := StopLocalLLMService(ctx)
+
+		a.updateUI(func() {
+			if a.localLLMRunID != runID {
+				return
+			}
+			if err != nil {
+				a.LocalLLMPhase = "error"
+				a.LocalLLMError = err.Error()
+				return
+			}
+			a.LocalLLMPhase = "off"
+			a.LocalLLMError = ""
+		})
+	}()
+}
+
+// renderLocalLLMServicePanel draws the on/off control for the local model.
+// It is shown before the "no articles" early returns so the service can
+// always be stopped after a summary run, even when no missing summaries
+// remain.
+func (a *App) renderLocalLLMServicePanel(c *ui.Context) {
+	ui.Column(c).
+		Padding(10).
+		Radius(6).
+		Background(a.Theme.SidebarBg).
+		Border(1, a.Theme.Border).
+		Gap(8).
+		Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Text(c, "Local AI service").FontSize(12).Bold().TextColor(a.Theme.Text)
+				ui.Spacer(c)
+
+				status := "Off"
+				statusColor := a.Theme.TextMuted
+				switch a.LocalLLMPhase {
+				case "checking":
+					status = "Checking..."
+				case "starting":
+					status = "Starting..."
+					statusColor = a.Theme.Accent
+				case "ready":
+					status = "Ready"
+					statusColor = a.Theme.Accent
+				case "stopping":
+					status = "Stopping..."
+				case "error":
+					status = "Error"
+					statusColor = ui.Hex("#ff3b30")
+				}
+				ui.Text(c, status).FontSize(11).Bold().TextColor(statusColor)
+
+				switch a.LocalLLMPhase {
+				case "off", "error":
+					if ui.PrimaryButton(c, "Turn On Service").Clicked() {
+						a.StartLocalLLM()
+					}
+				case "ready":
+					if ui.Button(c, "Turn Off Service").Clicked() {
+						a.StopLocalLLM()
+					}
+				case "checking", "starting", "stopping":
+					ui.Spinner(c)
+				}
+			})
+
+			ui.Text(c, DefaultLocalLLMModel+" • "+LocalLLMBaseURL).
+				FontSize(11).TextColor(a.Theme.TextMuted)
+
+			if a.LocalLLMError != "" {
+				ui.Text(c, a.LocalLLMError).FontSize(11).TextColor(ui.Hex("#ff3b30"))
+			}
+			if a.LocalLLMPhase != "ready" {
+				ui.Text(c, "The local model uses several GB of VRAM while it is running.").
+					FontSize(11).TextColor(a.Theme.TextMuted)
+			}
+		})
 }
 
 // formatElapsed shows a wait for people reading it, in seconds under a
@@ -950,24 +1099,18 @@ func (a *App) StartAISummary() {
 		a.AISummaryError = "There are no articles without a summary."
 		return
 	}
-
-	apiKey := a.geminiAPIKey()
-	if apiKey == "" {
-		a.AISummaryError = "Add your Gemini API key in Settings first."
+	if a.LocalLLMPhase != "ready" {
+		a.AISummaryError = "Turn on the local AI service first."
 		return
 	}
-
-	model := a.aiSummaryModel()
-	prompt := BuildSummaryPrompt(a.Settings.GeminiPrompt, a.AISummaryTargets)
 
 	a.AISummaryStep = 1
 	a.AISummaryError = ""
 	a.AISummaryWarning = ""
-	a.AISummaryThinking = ""
 	a.AISummaryOutput = ""
-	a.AISummaryStatus = "Waiting for Gemini..."
-	a.AISummaryMatches = nil
-	a.AISummaryOptions = nil
+	a.AISummaryStatus = "Connecting to the local AI service..."
+	a.AISummaryResults = nil
+	a.AISummaryCurrent = -1
 	a.AISummaryStartedAt = time.Now()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -975,82 +1118,119 @@ func (a *App) StartAISummary() {
 	a.aiRunID++
 	runID := a.aiRunID
 
+	targets := append([]AISummaryTarget(nil), a.AISummaryTargets...)
 	go func() {
-		var thoughts, answer strings.Builder
-		var lastFlush time.Time
-		status := "Waiting for Gemini..."
-
-		flush := func() {
-			t := thoughts.String()
-			ans := answer.String()
-			st := status
-			a.win.Update(func() {
+		if !LocalLLMHealthy() {
+			a.updateUI(func() {
 				if a.aiRunID != runID {
 					return
 				}
-				a.AISummaryThinking = t
-				a.AISummaryOutput = ans
-				a.AISummaryStatus = st
+				a.aiCancel = nil
+				a.AISummaryStatus = ""
+				a.AISummaryError = "The local AI service is not running. Turn it on, then retry."
+				a.LocalLLMPhase = "off"
+			})
+			return
+		}
+
+		total := len(targets)
+		for i, target := range targets {
+			if ctx.Err() != nil {
+				return
+			}
+
+			a.updateUI(func() {
+				if a.aiRunID != runID {
+					return
+				}
+				a.AISummaryCurrent = i
+				a.AISummaryOutput = ""
+				a.AISummaryStatus = fmt.Sprintf("Summarizing %d of %d...", i+1, total)
+			})
+
+			prompt := BuildSummaryPrompt(a.Settings.SummaryPrompt, []Article{target.Article})
+			var answer strings.Builder
+			var lastFlush time.Time
+
+			onText := func(chunk string) {
+				answer.WriteString(chunk)
+				if time.Since(lastFlush) < 100*time.Millisecond {
+					return
+				}
+				lastFlush = time.Now()
+				snapshot := answer.String()
+				a.updateUI(func() {
+					if a.aiRunID != runID {
+						return
+					}
+					a.AISummaryOutput = snapshot
+				})
+			}
+
+			result, err := StreamLocalSummary(ctx, prompt, onText)
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					a.updateUI(func() {
+						if a.aiRunID != runID {
+							return
+						}
+						a.aiCancel = nil
+						a.CancelAISummary()
+					})
+					return
+				}
+				partial := result.Answer
+				articleTitle := target.Article.Title
+				a.updateUI(func() {
+					if a.aiRunID != runID {
+						return
+					}
+					a.aiCancel = nil
+					a.AISummaryStatus = ""
+					a.AISummaryOutput = partial
+					a.AISummaryError = fmt.Sprintf("Could not summarize %q: %s", articleTitle, err)
+				})
+				return
+			}
+
+			summary := summaryFromAnswer(result.Answer)
+			if strings.TrimSpace(summary) == "" {
+				articleTitle := target.Article.Title
+				a.updateUI(func() {
+					if a.aiRunID != runID {
+						return
+					}
+					a.aiCancel = nil
+					a.AISummaryStatus = ""
+					a.AISummaryOutput = result.Answer
+					a.AISummaryError = fmt.Sprintf("The local AI returned no summary for %q.", articleTitle)
+				})
+				return
+			}
+
+			a.updateUI(func() {
+				if a.aiRunID != runID {
+					return
+				}
+				a.AISummaryResults = append(a.AISummaryResults, AISummaryResult{
+					Index:   target.Index,
+					Title:   target.Article.Title,
+					Summary: summary,
+				})
+				if result.FinishReason == "length" {
+					a.AISummaryWarning = "One or more summaries hit the model's output limit and may be incomplete."
+				}
 			})
 		}
 
-		onThought := func(chunk string) {
-			thoughts.WriteString(chunk)
-			status = "Thinking..."
-			if time.Since(lastFlush) >= 100*time.Millisecond {
-				lastFlush = time.Now()
-				flush()
-			}
-		}
-		onText := func(chunk string) {
-			answer.WriteString(chunk)
-			status = "Writing summaries..."
-			if time.Since(lastFlush) >= 100*time.Millisecond {
-				lastFlush = time.Now()
-				flush()
-			}
-		}
-
-		result, err := StreamGeminiSummaries(ctx, apiKey, model, prompt, onThought, onText)
-
-		a.win.Update(func() {
+		a.updateUI(func() {
 			if a.aiRunID != runID {
 				return
 			}
 			a.aiCancel = nil
 			a.AISummaryStatus = ""
-
-			if err != nil {
-				if ctx.Err() == context.Canceled {
-					a.AISummaryStep = 0
-					a.AISummaryThinking = ""
-					a.AISummaryOutput = ""
-					return
-				}
-				a.AISummaryThinking = result.Thoughts
-				a.AISummaryOutput = result.Answer
-				a.AISummaryError = err.Error()
-				return
-			}
-
-			a.AISummaryThinking = result.Thoughts
-			a.AISummaryOutput = result.Answer
-			switch result.FinishReason {
-			case "MAX_TOKENS":
-				a.AISummaryWarning = "Gemini's response was truncated. Some summaries may be incomplete."
-			case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT":
-				a.AISummaryWarning = fmt.Sprintf("Gemini stopped early (%s). Some summaries may be missing.", result.FinishReason)
-			}
-
-			blocks := ParsePastedSummaries(stripCodeFences(result.Answer))
-			if len(blocks) == 0 {
-				a.AISummaryError = "Gemini returned text, but no summaries could be parsed. Try again."
-				return
-			}
-
-			matches, options := MatchSummariesToArticles(blocks, a.Articles, false)
-			a.AISummaryMatches = matches
-			a.AISummaryOptions = options
+			a.AISummaryCurrent = -1
+			a.AISummaryOutput = ""
 			a.AISummaryStep = 2
 		})
 	}()
@@ -1068,10 +1248,12 @@ func (a *App) CancelAISummary() {
 	a.cancelAIRequest()
 	a.AISummaryStep = 0
 	a.AISummaryStatus = ""
-	a.AISummaryThinking = ""
 	a.AISummaryOutput = ""
 	a.AISummaryError = ""
 	a.AISummaryWarning = ""
+	a.AISummaryTargets = nil
+	a.AISummaryResults = nil
+	a.AISummaryCurrent = -1
 	a.AISummaryStartedAt = time.Time{}
 }
 
@@ -1080,24 +1262,45 @@ func (a *App) CloseAISummaryModal() {
 	a.ShowAISummaryModal = false
 }
 
+// applyAISummaryResults writes each generated summary to the article it was
+// generated for. The per-article target indices keep duplicate titles from
+// being matched to the wrong article.
+func (a *App) applyAISummaryResults() []string {
+	var applied []string
+	for _, result := range a.AISummaryResults {
+		if result.Index < 0 || result.Index >= len(a.Articles) {
+			continue
+		}
+		if strings.TrimSpace(result.Summary) == "" {
+			continue
+		}
+		a.Articles[result.Index].Summary = result.Summary
+		applied = append(applied, a.Articles[result.Index].Title)
+	}
+
+	// Keep the editor buffer in sync so SaveNow cannot overwrite a freshly
+	// generated summary on the currently selected article.
+	cur := a.CurrentArticle()
+	if cur != nil && strings.TrimSpace(cur.Summary) != "" {
+		a.initSummaryDoc(cur.Summary)
+		a.ShowMarkdownRender = true
+	}
+
+	a.SaveNow()
+	return applied
+}
+
 // ---------------- Settings ----------------
 
 func (a *App) OpenSettingsModal() {
-	a.SettingsDraftAPIKey = a.Settings.GeminiAPIKey
-	a.SettingsDraftModel = a.Settings.GeminiModel
-	a.SettingsDraftPrompt = a.Settings.GeminiPrompt
+	a.SettingsDraftPrompt = a.Settings.SummaryPrompt
 	a.ShowSettingsModal = true
 }
 
 func (a *App) SaveSettingsModal() {
-	a.Settings.GeminiAPIKey = strings.TrimSpace(a.SettingsDraftAPIKey)
-	a.Settings.GeminiModel = strings.TrimSpace(a.SettingsDraftModel)
-	if a.Settings.GeminiModel == "" {
-		a.Settings.GeminiModel = DefaultGeminiModel
-	}
-	a.Settings.GeminiPrompt = strings.TrimSpace(a.SettingsDraftPrompt)
-	if a.Settings.GeminiPrompt == "" {
-		a.Settings.GeminiPrompt = DefaultGeminiPrompt
+	a.Settings.SummaryPrompt = strings.TrimSpace(a.SettingsDraftPrompt)
+	if a.Settings.SummaryPrompt == "" {
+		a.Settings.SummaryPrompt = DefaultSummaryPrompt
 	}
 	_ = a.Settings.Save()
 	a.ShowSettingsModal = false
@@ -1225,7 +1428,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 		}
 
 		if ui.Button(c, "").
-			Tooltip("Generate Missing Summaries with Gemini").
+			Tooltip("Generate Missing Summaries with Local AI").
 			Gap(6).
 			Children(func() {
 				ui.Image(c, IconSparkle).Size(14, 14)
@@ -1648,26 +1851,19 @@ func (a *App) renderModals(c *ui.Context) {
 		ui.Column(c).Width(520).Gap(12).Children(func() {
 			ui.Text(c, "Settings").FontSize(16).Bold().TextColor(a.Theme.Text)
 
-			ui.Text(c, "API Key").FontSize(11).TextColor(a.Theme.TextMuted)
-			ui.TextInput(c.Key("geminiAPIKeyInput"), &a.SettingsDraftAPIKey).
-				Password().
-				Placeholder("AIza...").
-				Padding(c.Theme().Space(1), c.Theme().Space(2))
-
-			ui.Text(c, "Model").FontSize(11).TextColor(a.Theme.TextMuted)
-			ui.TextInput(c.Key("geminiModelInput"), &a.SettingsDraftModel).
-				Placeholder(DefaultGeminiModel).
-				Padding(c.Theme().Space(1), c.Theme().Space(2))
+			ui.Text(c, "Local AI").FontSize(11).TextColor(a.Theme.TextMuted)
+			ui.Text(c, fmt.Sprintf("%s • %s", DefaultLocalLLMModel, LocalLLMBaseURL)).
+				FontSize(12).TextColor(a.Theme.Text)
 
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Summary prompt").FontSize(11).TextColor(a.Theme.TextMuted)
 				ui.Spacer(c)
 				if ui.Button(c, "Reset to default").Border(1, a.Theme.Border).Radius(6).Clicked() {
-					a.SettingsDraftPrompt = DefaultGeminiPrompt
+					a.SettingsDraftPrompt = DefaultSummaryPrompt
 				}
 			})
-			ui.TextArea(c.Key("geminiPromptInput"), &a.SettingsDraftPrompt).
-				Placeholder(DefaultGeminiPrompt).
+			ui.TextArea(c.Key("summaryPromptInput"), &a.SettingsDraftPrompt).
+				Placeholder(DefaultSummaryPrompt).
 				Height(140).
 				Grow(1)
 
@@ -1683,7 +1879,7 @@ func (a *App) renderModals(c *ui.Context) {
 		})
 	})
 
-	// 8. Gemini AI Summary Modal
+	// 8. Local AI Summary Modal
 	ui.Modal(c, &a.ShowAISummaryModal, func() {
 		switch a.AISummaryStep {
 		case 0:
@@ -1698,6 +1894,7 @@ func (a *App) renderModals(c *ui.Context) {
 			})
 
 			if len(a.Articles) == 0 {
+				a.renderLocalLLMServicePanel(c)
 				ui.Text(c, "This project has no articles.").FontSize(12).TextColor(a.Theme.TextMuted)
 				ui.Row(c).Justify(ui.End).Children(func() {
 					if ui.Button(c, "Close").Clicked() {
@@ -1708,6 +1905,7 @@ func (a *App) renderModals(c *ui.Context) {
 			}
 
 			if len(a.AISummaryTargets) == 0 {
+				a.renderLocalLLMServicePanel(c)
 				ui.Text(c, "All articles in this project already have a summary.").
 					FontSize(12).TextColor(a.Theme.TextMuted)
 				ui.Row(c).Justify(ui.End).Children(func() {
@@ -1718,24 +1916,22 @@ func (a *App) renderModals(c *ui.Context) {
 				return
 			}
 
-			ui.Text(c, fmt.Sprintf("%d article(s) have no summary yet. Gemini will summarize all of them in one request.",
+			ui.Text(c, fmt.Sprintf("%d article(s) have no summary yet. Each article is sent to the local model one at a time.",
 				len(a.AISummaryTargets))).FontSize(12).TextColor(a.Theme.TextMuted)
-			model := a.aiSummaryModel()
-			ui.Text(c, "Model: "+model+" • One API request for the whole batch").
+			ui.Text(c, "Model: "+DefaultLocalLLMModel+" • Thinking off • One article per request").
 				FontSize(11).TextColor(a.Theme.TextMuted)
 
-			ui.Scroll(c).Height(240).Children(func() {
+			a.renderLocalLLMServicePanel(c)
+
+			ui.Text(c, "ARTICLES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+			ui.Scroll(c).Height(160).Children(func() {
 				ui.Column(c).Gap(4).AlignItems(ui.Stretch).Children(func() {
-					for _, art := range a.AISummaryTargets {
-						ui.Text(c, "• "+art.Title).FontSize(12).TextColor(a.Theme.Text).SingleLine()
+					for _, target := range a.AISummaryTargets {
+						ui.Text(c, "• "+target.Article.Title).FontSize(12).TextColor(a.Theme.Text).SingleLine()
 					}
 				})
 			})
 
-			if a.geminiAPIKey() == "" {
-				ui.Text(c, "Gemini API key is not set. Add it in Settings first.").
-					FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-			}
 			if a.AISummaryError != "" {
 				ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
 			}
@@ -1744,10 +1940,13 @@ func (a *App) renderModals(c *ui.Context) {
 				if ui.Button(c, "Cancel").Clicked() {
 					a.CloseAISummaryModal()
 				}
-				if a.geminiAPIKey() != "" {
+				if a.LocalLLMPhase == "ready" {
 					if ui.PrimaryButton(c, "Generate Summaries").Clicked() {
 						a.StartAISummary()
 					}
+				} else {
+					ui.Text(c, "Turn on the service to generate.").
+						FontSize(11).TextColor(a.Theme.TextMuted)
 				}
 			})
 
@@ -1759,15 +1958,13 @@ func (a *App) renderModals(c *ui.Context) {
 					if a.AISummaryError == "" && a.AISummaryStatus != "" {
 						ui.Spinner(c)
 					}
-					ui.Text(c, "Gemini").FontSize(16).Bold().TextColor(a.Theme.Text)
+					ui.Text(c, "Local AI Summary").FontSize(16).Bold().TextColor(a.Theme.Text)
 					ui.Spacer(c)
 					if a.AISummaryStatus != "" {
 						ui.Text(c, a.AISummaryStatus).FontSize(11).TextColor(a.Theme.TextMuted)
 					}
 				})
 
-				// Show what was sent while the free tier takes its time, so
-				// the wait has something to read besides the spinner.
 				ui.Column(c).
 					Padding(10).
 					Radius(6).
@@ -1775,55 +1972,71 @@ func (a *App) renderModals(c *ui.Context) {
 					Border(1, a.Theme.Border).
 					Gap(4).
 					Children(func() {
-						ui.Text(c, "REQUEST").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-						ui.Text(c, "Model: "+a.aiSummaryModel()).
-							FontSize(11).TextColor(a.Theme.Text)
-						ui.Text(c, fmt.Sprintf("%d article(s) in one request", len(a.AISummaryTargets))).
-							FontSize(11).TextColor(a.Theme.Text)
+						ui.Text(c, "PROGRESS").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
+						ui.Text(c, fmt.Sprintf("%d of %d articles summarized",
+							len(a.AISummaryResults), len(a.AISummaryTargets))).
+							FontSize(12).Bold().TextColor(a.Theme.Text)
 						if !a.AISummaryStartedAt.IsZero() && a.AISummaryError == "" {
-							wait := "Elapsed: " + formatElapsed(time.Since(a.AISummaryStartedAt))
-							if a.AISummaryOutput == "" && a.AISummaryThinking == "" {
-								wait += " • waiting for Gemini's first words"
-							}
-							ui.Text(c, wait).FontSize(11).TextColor(a.Theme.TextMuted)
-						}
-						if a.AISummaryOutput == "" && a.AISummaryThinking == "" && a.AISummaryError == "" {
-							ui.Text(c, "The free tier can take a while before Gemini responds.").
+							ui.Text(c, "Elapsed: "+formatElapsed(time.Since(a.AISummaryStartedAt))).
 								FontSize(11).TextColor(a.Theme.TextMuted)
 						}
-					})
-
-				if len(a.AISummaryTargets) > 0 {
-					ui.Text(c, "ARTICLES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-					ui.Scroll(c).Height(96).Children(func() {
-						ui.Column(c).Gap(2).AlignItems(ui.Stretch).Children(func() {
-							for _, art := range a.AISummaryTargets {
-								ui.Text(c, "• "+art.Title).
-									FontSize(11).TextColor(a.Theme.TextMuted).SingleLine()
-							}
-						})
-					})
-				}
-
-				if a.AISummaryThinking != "" {
-					ui.Text(c, "THINKING").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-					ui.Scroll(c).Height(120).Children(func() {
-						ui.Text(c, tailRunes(a.AISummaryThinking, 2500)).
+						ui.Text(c, "Model: "+DefaultLocalLLMModel+" • Thinking off • One article per request").
 							FontSize(11).TextColor(a.Theme.TextMuted)
 					})
-				}
 
-				if a.AISummaryOutput != "" {
-					ui.Text(c, "SUMMARIES").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-					ui.Scroll(c).Height(240).Children(func() {
-						ui.Text(c, tailRunes(a.AISummaryOutput, 4000)).
-							FontSize(12).TextColor(a.Theme.Text)
+				ui.Scroll(c).Grow(1).Height(320).Children(func() {
+					ui.Column(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+						for i, target := range a.AISummaryTargets {
+							completed := i < len(a.AISummaryResults)
+							running := i == a.AISummaryCurrent && a.AISummaryError == ""
+							failed := i == a.AISummaryCurrent && a.AISummaryError != ""
+
+							label := "Waiting"
+							labelColor := a.Theme.TextMuted
+							if completed {
+								label = "Done"
+								labelColor = a.Theme.Accent
+							} else if running {
+								label = "Summarizing..."
+								labelColor = a.Theme.Accent
+							} else if failed {
+								label = "Failed"
+								labelColor = ui.Hex("#ff3b30")
+							}
+
+							ui.Column(c).
+								Padding(8).
+								Radius(6).
+								Background(a.Theme.SidebarBg).
+								Border(1, a.Theme.Border).
+								Gap(4).
+								Children(func() {
+									ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+										ui.Text(c, "• "+target.Article.Title).
+											FontSize(12).Bold().TextColor(a.Theme.Text).SingleLine()
+										ui.Spacer(c)
+										ui.Text(c, label).FontSize(11).TextColor(labelColor)
+									})
+
+									if completed {
+										ui.Text(c, tailRunes(a.AISummaryResults[i].Summary, 1200)).
+											FontSize(12).TextColor(a.Theme.Text)
+									} else if running {
+										text := a.AISummaryOutput
+										if strings.TrimSpace(text) == "" {
+											text = "Waiting for the first words..."
+										}
+										ui.Text(c, tailRunes(text, 2000)).
+											FontSize(12).TextColor(a.Theme.Text)
+									}
+								})
+						}
 					})
-				}
+				})
 
 				if a.AISummaryError != "" {
 					ui.Text(c, a.AISummaryError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-					ui.Text(c, "Each retry sends another Gemini request.").
+					ui.Text(c, "The completed summaries are kept; retry starts over.").
 						FontSize(11).TextColor(a.Theme.TextMuted)
 				}
 
@@ -1833,16 +2046,27 @@ func (a *App) renderModals(c *ui.Context) {
 							a.CancelAISummary()
 						}
 					} else {
+						switch a.LocalLLMPhase {
+						case "starting", "checking", "stopping":
+							ui.Spinner(c)
+						case "ready":
+							// The Retry button below becomes available.
+						default:
+							if ui.PrimaryButton(c, "Turn On Service").Clicked() {
+								a.StartLocalLLM()
+							}
+						}
 						if ui.Button(c, "Back").Clicked() {
 							a.AISummaryStep = 0
 							a.AISummaryError = ""
+							a.AISummaryResults = nil
+							a.AISummaryCurrent = -1
+							a.AISummaryOutput = ""
 						}
-						if ui.Button(c, "Settings").Clicked() {
-							a.CloseAISummaryModal()
-							a.OpenSettingsModal()
-						}
-						if ui.PrimaryButton(c, "Retry").Clicked() {
-							a.StartAISummary()
+						if a.LocalLLMPhase == "ready" {
+							if ui.PrimaryButton(c, "Retry").Clicked() {
+								a.StartAISummary()
+							}
 						}
 					}
 				})
@@ -1852,51 +2076,36 @@ func (a *App) renderModals(c *ui.Context) {
 			ui.Row(c).FillWidth().MinWidth(480).Gap(16).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Review AI Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
 				ui.Spacer(c)
+				switch a.LocalLLMPhase {
+				case "ready":
+					if ui.Button(c, "Turn Off Service").Clicked() {
+						a.StopLocalLLM()
+					}
+				case "starting", "checking", "stopping":
+					ui.Spinner(c)
+				}
 				if ui.Button(c, "Back").Clicked() {
 					a.AISummaryStep = 0
 					a.AISummaryError = ""
+					a.AISummaryWarning = ""
+					a.AISummaryResults = nil
+					a.AISummaryCurrent = -1
+					a.AISummaryOutput = ""
 				}
 			})
 
-			matchedSet := make(map[string]bool)
-			var matchedTitles []string
-			for _, match := range a.AISummaryMatches {
-				if match.SelectedOption == OptionDoNotMatch || matchedSet[match.SelectedOption] {
-					continue
-				}
-				matchedSet[match.SelectedOption] = true
-				matchedTitles = append(matchedTitles, match.SelectedOption)
-			}
-			matchedCount := len(matchedTitles)
-
-			ui.Text(c, fmt.Sprintf("Gemini returned %d summaries. %d article(s) will receive a summary.",
-				len(a.AISummaryMatches), matchedCount)).
+			ui.Text(c, fmt.Sprintf("%d of %d articles summarized with %s.",
+				len(a.AISummaryResults), len(a.AISummaryTargets), DefaultLocalLLMModel)).
 				FontSize(12).TextColor(a.Theme.TextMuted)
 
 			if a.AISummaryWarning != "" {
 				ui.Text(c, a.AISummaryWarning).FontSize(11).TextColor(ui.Hex("#b26a00"))
 			}
-			if matchedCount < len(a.AISummaryTargets) {
-				ui.Text(c, fmt.Sprintf("%d of the %d articles without a summary still have no matched summary.",
-					len(a.AISummaryTargets)-matchedCount, len(a.AISummaryTargets))).
-					FontSize(11).TextColor(ui.Hex("#b26a00"))
-			}
-			if matchedCount > 0 {
-				ui.Text(c, "Articles receiving summaries:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-				ui.Scroll(c).Height(80).Children(func() {
-					ui.Column(c).Gap(2).AlignItems(ui.Stretch).Children(func() {
-						for _, title := range matchedTitles {
-							ui.Text(c, "• "+title).
-								FontSize(11).TextColor(a.Theme.Accent).SingleLine()
-						}
-					})
-				})
-			}
 
 			ui.Scroll(c).Grow(1).Children(func() {
 				ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
-					for i := range a.AISummaryMatches {
-						item := &a.AISummaryMatches[i]
+					for i := range a.AISummaryResults {
+						item := &a.AISummaryResults[i]
 
 						ui.Column(c).
 							Padding(10).
@@ -1905,19 +2114,14 @@ func (a *App) renderModals(c *ui.Context) {
 							Border(1, a.Theme.Border).
 							Gap(6).
 							Children(func() {
-								ui.Text(c, "Summary Title: "+item.RawTitle).
+								ui.Text(c, item.Title).
 									FontSize(13).Bold().TextColor(a.Theme.Text)
 
-								excerpt := item.Body
-								if len([]rune(excerpt)) > 120 {
-									excerpt = string([]rune(excerpt)[:120]) + "..."
+								excerpt := item.Summary
+								if len([]rune(excerpt)) > 240 {
+									excerpt = string([]rune(excerpt)[:240]) + "..."
 								}
 								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
-
-								ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-									ui.Text(c, "Assign to:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-									ui.Select(c.Key(fmt.Sprintf("aiAssignSel_%d", i)), &item.SelectedOption, a.AISummaryOptions).Width(340)
-								})
 							})
 					}
 				})
@@ -1927,9 +2131,9 @@ func (a *App) renderModals(c *ui.Context) {
 				if ui.Button(c, "Cancel").Clicked() {
 					a.CloseAISummaryModal()
 				}
-				if matchedCount > 0 {
+				if len(a.AISummaryResults) > 0 {
 					if ui.PrimaryButton(c, "Save Summaries").Clicked() {
-						applied := a.applySummaryMatches(a.AISummaryMatches)
+						applied := a.applyAISummaryResults()
 						a.ShowAISummaryModal = false
 						a.AISummaryStep = 0
 						switch len(applied) {

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestLoadSettingsMigratesLegacyGeminiModel(t *testing.T) {
+func TestLoadSettingsKeepsSavedSummaryPrompt(t *testing.T) {
 	home := t.TempDir()
 	stateHome := t.TempDir()
 	t.Setenv("HOME", home)
@@ -17,51 +17,16 @@ func TestLoadSettingsMigratesLegacyGeminiModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacy := `{"gemini_model": "gemini-3.8-flash"}`
+	// Older builds stored the prompt under "gemini_prompt". The key is
+	// deliberately kept so the user's custom prompt survives the upgrade.
+	legacy := `{"gemini_prompt": "Summarize these in one sentence."}`
 	if err := os.WriteFile(filepath.Join(stateDir, "settings.json"), []byte(legacy), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	settings := LoadSettings()
-	if settings.GeminiModel != DefaultGeminiModel {
-		t.Errorf("GeminiModel = %q, want %q", settings.GeminiModel, DefaultGeminiModel)
-	}
-}
-
-// TestLoadSettingsKeepsLegacyModelChosenAfterMigration checks that the
-// migration off the old default runs once: a user who picks that model on
-// purpose keeps it across restarts.
-func TestLoadSettingsKeepsLegacyModelChosenAfterMigration(t *testing.T) {
-	home := t.TempDir()
-	stateHome := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_STATE_HOME", stateHome)
-
-	stateDir := filepath.Join(stateHome, "mebot")
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	legacy := `{"gemini_model": "gemini-3.8-flash"}`
-	if err := os.WriteFile(filepath.Join(stateDir, "settings.json"), []byte(legacy), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// The first load migrates the old default.
-	first := LoadSettings()
-	if first.GeminiModel != DefaultGeminiModel {
-		t.Fatalf("GeminiModel = %q, want %q", first.GeminiModel, DefaultGeminiModel)
-	}
-
-	// The user then chooses the old model on purpose from Settings.
-	first.GeminiModel = legacyGeminiModel
-	if err := first.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	second := LoadSettings()
-	if second.GeminiModel != legacyGeminiModel {
-		t.Errorf("GeminiModel = %q, want the chosen %q", second.GeminiModel, legacyGeminiModel)
+	if settings.SummaryPrompt != "Summarize these in one sentence." {
+		t.Errorf("SummaryPrompt = %q, want the saved prompt", settings.SummaryPrompt)
 	}
 }
 
@@ -101,14 +66,8 @@ func TestLoadSettingsBackwardsCompatible(t *testing.T) {
 	if settings.LastProject != "Old Project" {
 		t.Errorf("LastProject = %q", settings.LastProject)
 	}
-	if settings.GeminiModel != DefaultGeminiModel {
-		t.Errorf("GeminiModel = %q, want %q", settings.GeminiModel, DefaultGeminiModel)
-	}
-	if settings.GeminiPrompt != DefaultGeminiPrompt {
-		t.Errorf("GeminiPrompt = %q, want the default prompt", settings.GeminiPrompt)
-	}
-	if settings.GeminiAPIKey != "" {
-		t.Errorf("GeminiAPIKey = %q, want empty", settings.GeminiAPIKey)
+	if settings.SummaryPrompt != DefaultSummaryPrompt {
+		t.Errorf("SummaryPrompt = %q, want the default prompt", settings.SummaryPrompt)
 	}
 }
 

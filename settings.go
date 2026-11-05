@@ -8,13 +8,7 @@ import (
 )
 
 const (
-	DefaultGeminiModel  = "gemini-3.5-flash-lite"
-	DefaultGeminiPrompt = "Can you provide a detailed summary for each of the following articles? Do not change the title. I prefer simple English terms and no bullet points so that the flow is smooth."
-
-	// legacyGeminiModel was the default before Gemini 3.8 Flash started
-	// returning 503 on the free tier. Existing settings are moved to the
-	// current default on load.
-	legacyGeminiModel = "gemini-3.8-flash"
+	DefaultSummaryPrompt = "Can you provide a detailed summary for each of the following articles? Do not change the title. I prefer simple English terms and no bullet points so that the flow is smooth."
 )
 
 type ProjectSelectionState struct {
@@ -32,13 +26,10 @@ type AppSettings struct {
 	// ExportDirectory is where the weekly rollup was last exported.
 	ExportDirectory string `json:"export_directory"`
 
-	GeminiAPIKey string `json:"gemini_api_key"`
-	GeminiModel  string `json:"gemini_model"`
-	GeminiPrompt string `json:"gemini_prompt"`
-
-	// GeminiModelMigrated records that the move off legacyGeminiModel has
-	// been made, so choosing that model on purpose later is kept.
-	GeminiModelMigrated bool `json:"gemini_model_migrated"`
+	// SummaryPrompt is the instruction sent to the local model. The JSON tag
+	// is kept from the Gemini version so prompts saved by older builds are
+	// preserved when upgrading.
+	SummaryPrompt string `json:"gemini_prompt"`
 }
 
 func SettingsFilePath() string {
@@ -52,8 +43,7 @@ func LoadSettings() *AppSettings {
 		IsDarkMode:    false,
 		LastProject:   "",
 		ProjectStates: make(map[string]ProjectSelectionState),
-		GeminiModel:   DefaultGeminiModel,
-		GeminiPrompt:  DefaultGeminiPrompt,
+		SummaryPrompt: DefaultSummaryPrompt,
 	}
 
 	data, err := os.ReadFile(SettingsFilePath())
@@ -63,27 +53,11 @@ func LoadSettings() *AppSettings {
 	if s.ProjectStates == nil {
 		s.ProjectStates = make(map[string]ProjectSelectionState)
 	}
-	if strings.TrimSpace(s.GeminiModel) == "" {
-		s.GeminiModel = DefaultGeminiModel
-	}
-	// Move the old default off once and remember it, so a user who picks
-	// that model on purpose keeps it across restarts.
-	needsSave := false
-	if !s.GeminiModelMigrated {
-		s.GeminiModelMigrated = true
-		if s.GeminiModel == legacyGeminiModel {
-			s.GeminiModel = DefaultGeminiModel
-			needsSave = err == nil
-		}
-	}
-	if strings.TrimSpace(s.GeminiPrompt) == "" {
-		s.GeminiPrompt = DefaultGeminiPrompt
+	if strings.TrimSpace(s.SummaryPrompt) == "" {
+		s.SummaryPrompt = DefaultSummaryPrompt
 	}
 	if strings.TrimSpace(s.ExportDirectory) == "" {
 		s.ExportDirectory = DefaultExportDir()
-	}
-	if needsSave {
-		_ = s.Save()
 	}
 	return s
 }
