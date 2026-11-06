@@ -85,6 +85,16 @@ type App struct {
 	aiCancel         context.CancelFunc
 	aiRunID          int
 
+	// Per-article Local AI Dictionary State. Entries live in memory only
+	// and are shown while AIDictionarySource matches the summary.
+	AIDictionaryArticle int // index being explained, -1 when idle
+	AIDictionaryRunning bool
+	AIDictionaryEntries []DictionaryEntry
+	AIDictionarySource  string
+	AIDictionaryError   string
+	dictionaryCancel    context.CancelFunc
+	dictionaryRunID     int
+
 	// Settings Modal State
 	ShowSettingsModal   bool
 	SettingsDraftPrompt string
@@ -156,6 +166,7 @@ func NewApp() *App {
 		ShowRenameProjectModal:   false,
 		ShowBatchSummaryModal:    false,
 		AISummaryArticle:         -1,
+		AIDictionaryArticle:      -1,
 		LocalLLMPhase:            "checking",
 		ShowSettingsModal:        false,
 		// The summary's preview shares its selection with the box around
@@ -286,7 +297,11 @@ func (a *App) SelectArticle(newIdx int) {
 	if a.AISummaryRunning && a.AISummaryArticle != newIdx {
 		a.cancelArticleAISummary()
 	}
+	if a.AIDictionaryRunning && a.AIDictionaryArticle != newIdx {
+		a.cancelAIDictionary()
+	}
 	a.AISummaryError = ""
+	a.AIDictionaryError = ""
 
 	if a.LastActiveIdx >= 0 && a.LastActiveIdx < len(a.Articles) && a.LastActiveIdx != newIdx {
 		if a.SummaryDoc != nil && !a.ShowMarkdownRender {
@@ -387,6 +402,7 @@ func (a *App) SwitchProject(newProject string) {
 		return
 	}
 	a.cancelArticleAISummary()
+	a.clearAIDictionary()
 
 	if a.ActiveProject != "" && a.ActiveProject != newProject && a.IsDirty {
 		_ = SaveProjectState(a.ActiveProject, a.Articles)
@@ -480,6 +496,7 @@ func (a *App) DeleteActiveProject() {
 		return
 	}
 	a.cancelArticleAISummary()
+	a.clearAIDictionary()
 
 	target := a.ActiveProject
 	_ = RemoveProjectState(target)
@@ -512,6 +529,7 @@ func (a *App) DeleteActiveProject() {
 
 func (a *App) ConfirmDeleteChosenArticles() {
 	a.cancelArticleAISummary()
+	a.clearAIDictionary()
 	if a.ChosenArticles.Len() == 0 && a.CurrentArticle() != nil {
 		idx := a.ActiveIdx
 		a.Articles = append(a.Articles[:idx], a.Articles[idx+1:]...)
@@ -870,6 +888,7 @@ func (a *App) ApplyBatchMatches() {
 
 func (a *App) applySummaryMatches(matches []ParsedSummaryBlock) []string {
 	applied := ApplySummaryMatches(matches, a.Articles)
+	a.clearAIDictionary()
 
 	// Keep the editor buffer in sync so SaveNow cannot overwrite a freshly
 	// generated summary on the currently selected article.
@@ -1035,6 +1054,8 @@ func (a *App) StartAISummary() {
 	if target == nil {
 		return
 	}
+	a.cancelAIDictionary()
+	a.AIDictionaryError = ""
 	if a.LocalLLMPhase != "ready" {
 		a.AISummaryError = "Turn on the local LLM first."
 		return
@@ -1149,6 +1170,11 @@ func (a *App) StartAISummary() {
 				a.initSummaryDoc(summary)
 				a.ShowMarkdownRender = true
 			}
+			if a.AIDictionaryArticle == idx {
+				a.AIDictionaryEntries = nil
+				a.AIDictionarySource = ""
+				a.AIDictionaryError = ""
+			}
 			a.SaveNow()
 		})
 	}()
@@ -1173,6 +1199,150 @@ func (a *App) cancelArticleAISummary() {
 	a.AISummaryArticle = -1
 	a.AISummaryRunning = false
 	a.AISummaryOutput = ""
+}
+
+// ---------------- Local AI Dictionary ----------------
+
+// currentSummaryForAI returns the summary the user is looking at, including
+// edits the rich-text editor holds but has not written back yet.
+func (a *App) currentSummaryForAI(cur *Article) string {
+	if cur == nil {
+		return ""
+	}
+	if a.SummaryDoc != nil && !a.ShowMarkdownRender && cur == a.CurrentArticle() {
+		return a.currentSummaryMarkdown()
+	}
+	return cur.Summary
+}
+
+// StartAIDictionary asks the local model for the rare words, idioms and
+// common phrases in the current summary and keeps the answers in memory.
+func (a *App) StartAIDictionary() {
+	if a.dictionaryCancel != nil {
+		return
+	}
+	target := a.CurrentArticle()
+	if target == nil {
+		return
+	}
+	if a.LocalLLMPhase != "ready" {
+		a.AIDictionaryError = "Turn on the local LLM first."
+		return
+	}
+
+	targetIndex := a.ActiveIdx
+	summary := strings.TrimSpace(a.currentSummaryForAI(target))
+	if summary == "" {
+		a.AIDictionaryError = "There is no summary to explain yet."
+		return
+	}
+	target.Summary = summary
+
+	a.AIDictionaryArticle = targetIndex
+	a.AIDictionaryRunning = true
+	a.AIDictionaryEntries = nil
+	a.AIDictionarySource = summary
+	a.AIDictionaryError = ""
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.dictionaryCancel = cancel
+	a.dictionaryRunID++
+	runID := a.dictionaryRunID
+
+	prompt := BuildDictionaryPrompt(summary)
+	go func() {
+		if !LocalLLMHealthy() {
+			a.updateUI(func() {
+				if a.dictionaryRunID != runID {
+					return
+				}
+				a.dictionaryCancel = nil
+				a.AIDictionaryRunning = false
+				a.AIDictionaryError = "The local LLM is not running. Turn it on first."
+				a.LocalLLMPhase = "off"
+			})
+			return
+		}
+
+		result, err := StreamLocalSummary(ctx, prompt, nil)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				return
+			}
+			a.updateUI(func() {
+				if a.dictionaryRunID != runID {
+					return
+				}
+				a.dictionaryCancel = nil
+				a.AIDictionaryRunning = false
+				a.AIDictionaryError = fmt.Sprintf("Could not explain the summary: %s", err)
+			})
+			return
+		}
+
+		entries := FilterDictionaryEntries(ParseDictionaryEntries(result.Answer), summary)
+
+		a.updateUI(func() {
+			if a.dictionaryRunID != runID {
+				return
+			}
+			a.dictionaryCancel = nil
+			a.AIDictionaryRunning = false
+
+			idx := -1
+			for i, article := range a.Articles {
+				if article == target {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 || a.ActiveIdx != idx {
+				return
+			}
+
+			// The summary may have been edited while the model was working:
+			// the offsets of its terms no longer describe what is on screen.
+			if strings.TrimSpace(a.currentSummaryForAI(target)) != summary {
+				a.AIDictionaryError = "The summary changed while the AI Dictionary was working. Try again."
+				return
+			}
+
+			if len(entries) == 0 {
+				a.AIDictionaryError = "The AI Dictionary found no rare words or phrases in this summary."
+				return
+			}
+
+			a.AIDictionaryArticle = idx
+			a.AIDictionaryEntries = entries
+			a.AIDictionarySource = summary
+			if !a.ShowMarkdownRender {
+				a.initSummaryDoc(summary)
+				a.ShowMarkdownRender = true
+			}
+		})
+	}()
+}
+
+// cancelAIDictionary stops an in-flight dictionary lookup. Finished entries
+// stay in memory until another article's lookup replaces them.
+func (a *App) cancelAIDictionary() {
+	if a.dictionaryCancel != nil {
+		a.dictionaryCancel()
+		a.dictionaryCancel = nil
+	}
+	a.dictionaryRunID++
+	a.AIDictionaryRunning = false
+}
+
+// clearAIDictionary forgets the current article's entries, as when the
+// project or its articles change under them.
+func (a *App) clearAIDictionary() {
+	a.cancelAIDictionary()
+	a.AIDictionaryArticle = -1
+	a.AIDictionaryRunning = false
+	a.AIDictionaryEntries = nil
+	a.AIDictionarySource = ""
+	a.AIDictionaryError = ""
 }
 
 // ---------------- Settings ----------------
@@ -1475,6 +1645,9 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 func (a *App) renderSummaryColumn(c *ui.Context) {
 	current := a.CurrentArticle()
 	running := a.AISummaryRunning && current != nil && a.AISummaryArticle == a.ActiveIdx
+	dictRunning := a.AIDictionaryRunning && current != nil && a.AIDictionaryArticle == a.ActiveIdx
+	summaryText := a.currentSummaryForAI(current)
+	hasSummary := strings.TrimSpace(summaryText) != ""
 	ui.Column(c).Fill().Padding(16).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
 		wasPreview := a.ShowMarkdownRender
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -1484,7 +1657,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			ui.Switch(c.Key("summaryPreviewSwitch"), &a.ShowMarkdownRender).Tooltip("Toggle Markdown Preview")
 			ui.Text(c, "Preview").FontSize(11).TextColor(a.Theme.TextMuted)
 
-			if running {
+			if running || dictRunning {
 				ui.Spinner(c)
 			}
 
@@ -1498,7 +1671,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			}
 			if ui.Button(c, "").
 				Tooltip(aiTip).
-				Disabled(a.LocalLLMPhase != "ready" || current == nil || running).
+				Disabled(a.LocalLLMPhase != "ready" || current == nil || running || dictRunning).
 				Gap(6).
 				Children(func() {
 					ui.Image(c, IconSparkle).Size(14, 14)
@@ -1507,15 +1680,44 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 				a.StartAISummary()
 			}
 
-			if running {
+			dictTip := "Explain rare words, phrases, and idioms in this summary"
+			if a.LocalLLMPhase != "ready" {
+				dictTip = "Turn on Local LLM to use the AI Dictionary"
+			} else if current == nil {
+				dictTip = "Select an article first"
+			} else if !hasSummary {
+				dictTip = "Generate or write a summary first"
+			} else if dictRunning {
+				dictTip = "Looking up words and phrases..."
+			} else if running {
+				dictTip = "Wait for the summary to finish"
+			} else if len(a.AIDictionaryEntries) > 0 && a.AIDictionaryArticle == a.ActiveIdx {
+				dictTip = "Refresh the AI Dictionary for this summary"
+			}
+			if ui.Button(c, "").
+				Tooltip(dictTip).
+				Disabled(a.LocalLLMPhase != "ready" || current == nil || !hasSummary || dictRunning || running).
+				Gap(6).
+				Children(func() {
+					ui.Image(c, IconDictionary).Size(14, 14)
+					ui.Text(c, "AI Dictionary").SingleLine()
+				}).Clicked() {
+				a.StartAIDictionary()
+			}
+
+			if running || dictRunning {
 				if ui.Button(c, "Cancel").Border(1, a.Theme.Border).Radius(6).Clicked() {
 					a.cancelArticleAISummary()
+					a.cancelAIDictionary()
 				}
 			}
 		})
 
 		if a.AISummaryError != "" {
 			ui.Text(c, a.AISummaryError).FontSize(11).TextColor(ui.Hex("#ff3b30"))
+		}
+		if a.AIDictionaryError != "" {
+			ui.Text(c, a.AIDictionaryError).FontSize(11).TextColor(ui.Hex("#ff3b30"))
 		}
 
 		// Turning the preview on shows what was just typed, which the
@@ -1528,6 +1730,10 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
 			return
 		}
+
+		showDictionary := a.ShowMarkdownRender && !running && len(a.AIDictionaryEntries) > 0 &&
+			a.AIDictionaryArticle == a.ActiveIdx &&
+			strings.TrimSpace(a.AIDictionarySource) == strings.TrimSpace(a.currentSummaryForAI(current))
 
 		if a.mdOpts.Theme == nil {
 			a.mdOpts.Theme = &markdown.Theme{}
@@ -1558,7 +1764,11 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 					}
 				})
 				box.Children(func() {
-					markdown.View(c, current.Summary, &a.mdOpts)
+					if showDictionary {
+						renderDictionarySummary(c, current.Summary, a.AIDictionaryEntries, a.Theme, a.CurrentFontFamily(), a.CurrentFontSize())
+					} else {
+						markdown.View(c, current.Summary, &a.mdOpts)
+					}
 				})
 			})
 		} else {

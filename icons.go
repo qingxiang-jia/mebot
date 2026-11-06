@@ -60,6 +60,9 @@ var (
 	// status: starred (AI summary)
 	IconSparkle = mustIcon("sparkle.svg")
 
+	// dictionary book (AI Dictionary)
+	IconDictionary = mustIcon("dictionary.svg")
+
 	// actions: system-shutdown (local LLM power)
 	IconPower = mustIcon("power.svg")
 
