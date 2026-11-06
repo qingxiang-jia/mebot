@@ -169,31 +169,29 @@ func TestAISummaryButtonDisabledWhenLocalLLMOff(t *testing.T) {
 	}
 }
 
-// TestAIButtonsDisabledWhileLocalLLMChecks checks that the AI actions wait
-// for the background status check instead of reporting that the model is off.
-func TestAIButtonsDisabledWhileLocalLLMChecks(t *testing.T) {
+// TestAISummaryButtonDisabledWhileLocalLLMChecks checks that the AI action
+// waits for the background status check instead of reporting that the model
+// is off.
+func TestAISummaryButtonDisabledWhileLocalLLMChecks(t *testing.T) {
 	a := &App{
-		Articles:            []*Article{{Title: "One", Summary: "hello world"}},
-		ActiveIdx:           0,
-		AISummaryArticle:    -1,
-		AIDictionaryArticle: -1,
-		ShowMarkdownRender:  true,
-		LocalLLMPhase:       "checking",
-		Theme:               MacOSLightTheme(),
-		mdOpts:              markdown.Options{ShareSelection: true},
+		Articles:           []*Article{{Title: "One", Summary: "hello world"}},
+		ActiveIdx:          0,
+		AISummaryArticle:   -1,
+		ShowMarkdownRender: true,
+		LocalLLMPhase:      "checking",
+		Theme:              MacOSLightTheme(),
+		mdOpts:             markdown.Options{ShareSelection: true},
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 900, 400)
 
-	for _, label := range []string{"AI Summary", "AI Dictionary"} {
-		if err := tt.Click(label); err != nil {
-			t.Fatal(err)
-		}
+	if err := tt.Click("AI Summary"); err != nil {
+		t.Fatal(err)
 	}
-	if a.AISummaryRunning || a.AIDictionaryRunning {
-		t.Fatal("an AI action started while the local LLM status was still being checked")
+	if a.AISummaryRunning {
+		t.Fatal("the AI Summary action started while the local LLM status was still being checked")
 	}
-	if a.AISummaryError != "" || a.AIDictionaryError != "" {
-		t.Fatalf("an AI action ran while checking: summary error %q, dictionary error %q", a.AISummaryError, a.AIDictionaryError)
+	if a.AISummaryError != "" {
+		t.Fatalf("the AI Summary action ran while checking: %q", a.AISummaryError)
 	}
 }
 
