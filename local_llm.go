@@ -41,7 +41,14 @@ var localLLMHTTPClient = func() *http.Client {
 	}
 }()
 
-var localLLMHealthClient = &http.Client{Timeout: 3 * time.Second}
+var localLLMHealthClient = func() *http.Client {
+	// As with the chat client, a proxy must not stand between the app and
+	// a server on this machine: it can add latency, fail, or answer for a
+	// server that is already up.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Timeout: 3 * time.Second, Transport: transport}
+}()
 
 type LocalStreamResult struct {
 	Answer       string
@@ -133,7 +140,7 @@ func LocalLLMHealthy() bool {
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024))
-	return resp.StatusCode == http.StatusOK
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 // StreamLocalSummary sends one article prompt to the local model and streams

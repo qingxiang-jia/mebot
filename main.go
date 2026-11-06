@@ -1007,6 +1007,7 @@ func (a *App) StopLocalLLM() {
 func (a *App) renderLocalLLMButton(c *ui.Context) {
 	color := ui.Hex("#ff3b30")
 	tooltip := "Turn On Local LLM"
+	busy := a.LocalLLMPhase == "checking" || a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "stopping"
 
 	switch a.LocalLLMPhase {
 	case "ready":
@@ -1027,6 +1028,7 @@ func (a *App) renderLocalLLMButton(c *ui.Context) {
 
 	button := ui.Button(c, "").
 		Tooltip(tooltip).
+		Disabled(busy).
 		Gap(6).
 		Children(func() {
 			ui.Icon(c, IconPower).Size(14, 14).TextColor(color)
