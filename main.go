@@ -1573,6 +1573,9 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 		}
 		a.mdOpts.Theme.Font = a.CurrentFontFamily()
 		a.mdOpts.Theme.FontSize = a.CurrentFontSize()
+		// Lift links above the body text, so they still read as links where
+		// the accent color alone is hard to tell from the text.
+		a.mdOpts.Theme.LinkWeight = 500
 
 		if running {
 			ui.Scroll(c).Grow(1).Children(func() {
@@ -1688,7 +1691,10 @@ func (a *App) renderModals(c *ui.Context) {
 		ui.Text(c, "Export Weekly Rollup").FontSize(16).Bold().TextColor(a.Theme.Text)
 
 		ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
-		ui.Calendar(c, &a.SelectedDate)
+		// Browsing months with the keyboard or the arrows only moves the
+		// calendar until the user clicks a day, so the export date doesn't
+		// change while looking around.
+		ui.Calendar(c, &a.SelectedDate).Browse()
 
 		exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
 
@@ -1850,8 +1856,12 @@ func main() {
 			Title:   "Mebot",
 			Width:   1760,
 			Height:  1000,
+			Hidden:  true,
 			Content: ui.View(app.View),
 		})
+		// Show the window only once its first frame is drawn, instead of
+		// opening blank and filling in.
+		win.OnReadyToShow(win.Show)
 		app.win = win
 		app.RefreshLocalLLMStatus()
 
