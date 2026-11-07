@@ -69,6 +69,13 @@ func (a *App) fontCombobox(c *ui.Context) {
 		panel.Margin(t.Space(1), 0, 0, 0).Padding(t.Space(1)).
 			Radius(t.Radius+2).Background(t.Background).
 			Border(1, t.Border).Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18))
+		if len(shown) == 0 {
+			ui.Text(c, "No matching fonts").
+				FontSize(12).
+				TextColor(t.TextMuted).
+				Padding(t.Space(1.5), t.Space(2.5))
+			return
+		}
 		ui.Scroll(c).WidthPercent(100).MaxHeight(t.Space(70)).Children(func() {
 			for _, font := range shown {
 				item := cb.Item(font).Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius)

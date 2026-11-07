@@ -174,8 +174,8 @@ func NewApp() *App {
 		LocalLLMPhase:            "checking",
 		ShowSettingsModal:        false,
 		// The summary's preview shares its selection with the box around
-		// it, whose menu mygo draws in the window: the view's own is the
-		// system's, GTK's on Linux.
+		// it, whose menu adds Copy Summary as Markdown; the window draws
+		// every menu in its own look (Context.SetMenuPresentation).
 		mdOpts: markdown.Options{ShareSelection: true},
 	}
 
@@ -695,7 +695,7 @@ func (a *App) buildArticleMenu(m *ui.Menu) {
 	if count > 1 {
 		del = fmt.Sprintf("Delete %d Articles…", count)
 	}
-	if m.Item(del).Chosen() {
+	if m.Item(del).Danger().Chosen() {
 		a.ShowDeleteArticleConfirm = true
 	}
 }
@@ -706,7 +706,7 @@ func (a *App) ImportHTMLFiles() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:   a.win,
 			Title:    "Import HTML Article(s)",
-			Filters:  []mygo.FileFilter{{Name: "HTML Articles", Extensions: []string{"html", "htm"}}},
+			Filters:  []mygo.FileFilter{{Name: "HTML Articles", Extensions: []string{"html", "htm"}, MIMETypes: []string{"text/html"}}},
 			Multiple: true,
 		})
 		if err != nil || len(paths) == 0 {
@@ -741,7 +741,7 @@ func (a *App) ImportMarkdownFile() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:   a.win,
 			Title:    "Import Markdown Rollup",
-			Filters:  []mygo.FileFilter{{Name: "Markdown Files", Extensions: []string{"md", "markdown"}}},
+			Filters:  []mygo.FileFilter{{Name: "Markdown Files", Extensions: []string{"md", "markdown"}, MIMETypes: []string{"text/markdown", "text/x-markdown"}}},
 			Multiple: false,
 		})
 		if err != nil || len(paths) == 0 {
@@ -1228,6 +1228,10 @@ func (a *App) View(c *ui.Context) {
 	t.Accent = a.Theme.ActiveRowBg
 	t.AccentText = a.Theme.ActiveRowText
 	c.SetTheme(&t)
+	// Draw every popup menu in the window, in Mebot's look: the editors'
+	// and selectable text's editing menus included, not only the menus
+	// built with PopoverMenu.
+	c.SetMenuPresentation(ui.PopoverMenus)
 
 	if a.ActiveIdx != a.LastActiveIdx && a.ActiveIdx >= 0 && a.ActiveIdx < len(a.Articles) {
 		a.SelectArticle(a.ActiveIdx)
@@ -1249,8 +1253,8 @@ func (a *App) View(c *ui.Context) {
 				a.renderFullTextColumn(c)
 			}, func() {
 				a.renderSummaryColumn(c)
-			}).Fill()
-		}).Grow(1)
+			}).SplitReset(680).Fill()
+		}).SplitReset(320).Grow(1)
 
 		// 3. Modals & Native Dialogs
 		a.renderModals(c)
@@ -1490,6 +1494,7 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 			Font(a.CurrentFontFamily()).
 			FontSize(a.CurrentFontSize() + 4).
 			Bold().
+			Balance().
 			TextColor(a.Theme.Text)
 
 		ui.Scroll(c).Grow(1).Children(func() {
@@ -1589,9 +1594,8 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			})
 		} else if a.ShowMarkdownRender {
 			ui.Scroll(c).Grow(1).Children(func() {
-				// The markdown view gives its selection to this box, whose
-				// menu MyGo draws in the window, in the theme's look. The
-				// view's own menu is the system's, GTK's on Linux.
+				// The window draws all its menus, and this box's adds the
+				// summary's own Copy Summary as Markdown item.
 				box := ui.Column(c).Selectable().PopoverMenu(func(m *ui.Menu) {
 					m.EditItems()
 					m.Separator()
@@ -1690,17 +1694,17 @@ func (a *App) renderModals(c *ui.Context) {
 	ui.Modal(c, &a.ShowExportModal, func() {
 		ui.Text(c, "Export Weekly Rollup").FontSize(16).Bold().TextColor(a.Theme.Text)
 
-		ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
+		dateLabel := ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
 		// Browsing months with the keyboard or the arrows only moves the
 		// calendar until the user clicks a day, so the export date doesn't
 		// change while looking around.
-		ui.Calendar(c, &a.SelectedDate).Browse()
+		ui.Calendar(c, &a.SelectedDate).Browse().LabelledBy(dateLabel)
 
 		exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
 
-		ui.Text(c, "Destination Folder:").FontSize(11).TextColor(a.Theme.TextMuted)
+		folderLabel := ui.Text(c, "Destination Folder:").FontSize(11).TextColor(a.Theme.TextMuted)
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
-			ui.TextInput(c.Key("exportDirInput"), &a.ExportDirectory).Grow(1)
+			ui.TextInput(c.Key("exportDirInput"), &a.ExportDirectory).Grow(1).LabelledBy(folderLabel)
 			if ui.Button(c, "Browse...").Border(1, a.Theme.Border).Radius(6).Clicked() {
 				a.BrowseExportDirectory()
 			}

@@ -76,4 +76,10 @@ func TestFontComboboxOpensAtTheSelectedFont(t *testing.T) {
 	if !tt.HasText("Font 90") || tt.HasText("Font 00") {
 		t.Errorf("typing after opening shows %q", tt.Texts())
 	}
+
+	// A query no font matches says so instead of showing an empty popup.
+	tt.Type("zzz")
+	if !tt.HasText("No matching fonts") {
+		t.Errorf("a query no font matches shows %q", tt.Texts())
+	}
 }

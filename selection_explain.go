@@ -323,6 +323,7 @@ func (a *App) renderSelectionExplanation(c *ui.Context, source string) {
 				TextColor(ui.Hex("#ff3b30"))
 		case a.SelectionExplanation != "":
 			ui.Text(c, a.SelectionExplanation).Font(a.CurrentFontFamily()).FontSize(a.CurrentFontSize()).
+				Pretty().
 				TextColor(a.Theme.Text)
 		default:
 			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
