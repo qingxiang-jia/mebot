@@ -71,6 +71,16 @@ func hairline(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).FillWidth().Height(1).Shrink(0).Background(t.Border)
 }
 
+// scrollPane fills the remaining height with a scroll view inset from the
+// bottom, so its overlay scroll bar keeps its rounded end clear of the
+// window's corner instead of running under it.
+func scrollPane(c *ui.Context, build func()) {
+	body := ui.Column(c).Grow(1).FillWidth().Padding(0, 0, apple.SpaceL, 0)
+	body.Children(func() {
+		ui.Scroll(c).Grow(1).FillWidth().Children(build)
+	})
+}
+
 // View is the whole window: the client-side chrome, the article source
 // list, the toolbar over the reader, and the two reading panes.
 func (a *App) View(c *ui.Context) {
@@ -92,11 +102,14 @@ func (a *App) View(c *ui.Context) {
 			right.Children(func() {
 				a.renderToolbar(c)
 				hairline(c, t)
+				// Grow, not Fill: the toolbar and its hairline are siblings,
+				// so a 100% height here would run the reader panes past the
+				// window's bottom edge.
 				ui.SplitPercent(c, &a.ReaderPercent, func() {
 					a.renderFullTextColumn(c)
 				}, func() {
 					a.renderSummaryColumn(c)
-				}).Fill()
+				}).Grow(1).FillWidth()
 			})
 		}).Fill()
 	})
@@ -328,7 +341,7 @@ func (a *App) renderArticleSidebar(c *ui.Context) {
 		})
 
 		if len(a.Articles) == 0 {
-			empty := ui.Column(c).Fill().Grow(1).Padding(apple.Space2X).
+			empty := ui.Column(c).Grow(1).FillWidth().Padding(apple.Space2X).
 				Justify(ui.Center).AlignItems(ui.Center).Gap(apple.Space)
 			empty.Children(func() {
 				ui.Icon(c, iconInbox).FontSize(28).TextColor(t.TextMuted)
@@ -339,9 +352,9 @@ func (a *App) renderArticleSidebar(c *ui.Context) {
 			return
 		}
 
-		body := ui.Column(c).Fill().Padding(0, apple.Space)
+		body := ui.Column(c).Grow(1).FillWidth().Padding(0, apple.Space, apple.SpaceL, apple.Space)
 		body.Children(func() {
-			ui.List(c, &a.ArticleListState, len(a.Articles)).Fill().Rows(func(r ui.ListRow) {
+			ui.List(c, &a.ArticleListState, len(a.Articles)).Grow(1).FillWidth().Rows(func(r ui.ListRow) {
 				i := r.Index
 				if i < 0 || i >= len(a.Articles) {
 					return
@@ -388,7 +401,7 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 		hairline(c, t)
 
 		if current == nil {
-			empty := ui.Column(c).Fill().Grow(1).Justify(ui.Center).
+			empty := ui.Column(c).Grow(1).FillWidth().Justify(ui.Center).
 				AlignItems(ui.Center).Gap(apple.Space)
 			empty.Children(func() {
 				ui.Icon(c, iconCompose).FontSize(30).TextColor(t.TextMuted)
@@ -399,7 +412,7 @@ func (a *App) renderFullTextColumn(c *ui.Context) {
 			return
 		}
 
-		ui.Scroll(c).Fill().Grow(1).Children(func() {
+		scrollPane(c, func() {
 			content := ui.Column(c).FillWidth().
 				Padding(apple.Space2X, 30).Gap(apple.SpaceL)
 			content.Children(func() {
@@ -563,7 +576,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 		}
 
 		if current == nil {
-			empty := ui.Column(c).Fill().Grow(1).Justify(ui.Center).
+			empty := ui.Column(c).Grow(1).FillWidth().Justify(ui.Center).
 				AlignItems(ui.Center).Gap(apple.Space)
 			empty.Children(func() {
 				ui.Icon(c, iconSparkle).FontSize(30).TextColor(t.TextMuted)
@@ -586,7 +599,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 		a.mdOpts.Theme.LinkWeight = 500
 
 		if running {
-			ui.Scroll(c).Fill().Grow(1).Children(func() {
+			scrollPane(c, func() {
 				body := ui.Column(c).FillWidth().Padding(apple.Space2X, 26)
 				body.Children(func() {
 					if strings.TrimSpace(a.AISummaryOutput) == "" {
@@ -599,7 +612,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 				})
 			})
 		} else if a.ShowMarkdownRender {
-			ui.Scroll(c).Fill().Grow(1).Children(func() {
+			scrollPane(c, func() {
 				box := ui.Column(c).Selectable().PopoverMenu(func(m *ui.Menu) {
 					m.EditItems()
 					m.Separator()
@@ -617,7 +630,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			})
 		} else {
 			if a.SummaryDoc != nil {
-				editor := ui.Column(c).Fill().Grow(1).Padding(apple.Space2X, 26)
+				editor := ui.Column(c).Grow(1).FillWidth().Padding(apple.Space2X, 26)
 				editor.Children(func() {
 					view := richtext.EditorBase(c.Key(fmt.Sprintf("summaryMarkdownEditor_%d", a.ActiveIdx)),
 						a.SummaryDoc, richtext.EditorOptions{
