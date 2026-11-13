@@ -35,6 +35,25 @@ func TestFilterCleanReadingFontsDropsNotoVariants(t *testing.T) {
 	}
 }
 
+func TestFontChooserChoosesAFont(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	app := &App{
+		AvailableFonts: []string{"Sans", "Serif"},
+		SelectedFont:   "Sans",
+		Settings:       &AppSettings{},
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Padding(8).Children(func() { app.fontChooser(c) })
+	}, 400, 300)
+
+	if err := tt.Click("Serif"); err != nil {
+		t.Fatal(err)
+	}
+	if app.SelectedFont != "Serif" || app.Settings.FontFamily != "Serif" {
+		t.Fatalf("choosing Serif left font %q, saved %q", app.SelectedFont, app.Settings.FontFamily)
+	}
+}
+
 func TestFontMatches(t *testing.T) {
 	fonts := []string{"DejaVu Sans", "Noto Sans", "Noto Serif", "Open Sans"}
 	got := fontMatches(fonts, "noto")
@@ -47,22 +66,21 @@ func TestFontMatches(t *testing.T) {
 	}
 }
 
-func TestFontComboboxOpensAtTheSelectedFont(t *testing.T) {
+func TestFontChooserOpensAtTheSelectedFont(t *testing.T) {
 	var fonts []string
 	for i := 0; i < 100; i++ {
 		fonts = append(fonts, fmt.Sprintf("Font %02d", i))
 	}
 	selected := "Font 90"
 	app := &App{
-		AvailableFonts: fonts,
-		SelectedFont:   selected,
-		FontPickerText: selected,
-		Settings:       &AppSettings{},
+		AvailableFonts:       fonts,
+		SelectedFont:         selected,
+		TypographyJustOpened: true,
+		Settings:             &AppSettings{},
 	}
-	tt := ui.NewTester(func(c *ui.Context) { app.fontCombobox(c) }, 400, 300)
-	if err := tt.Click("Font"); err != nil {
-		t.Fatal(err)
-	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Padding(8).Children(func() { app.fontChooser(c) })
+	}, 400, 300)
 	r, ok := tt.Find(selected)
 	if !ok {
 		t.Fatalf("the selected font is not shown: %q", tt.Texts())
@@ -71,13 +89,13 @@ func TestFontComboboxOpensAtTheSelectedFont(t *testing.T) {
 		t.Errorf("the selected font is at y=%v..%v, outside the 300 DIP window", r.Y, r.Y+r.H)
 	}
 
-	// Typing after opening replaces the choice and filters the fonts.
+	// Typing in the search field filters the families.
 	tt.Type("90")
 	if !tt.HasText("Font 90") || tt.HasText("Font 00") {
 		t.Errorf("typing after opening shows %q", tt.Texts())
 	}
 
-	// A query no font matches says so instead of showing an empty popup.
+	// A query no font matches says so instead of showing an empty list.
 	tt.Type("zzz")
 	if !tt.HasText("No matching fonts") {
 		t.Errorf("a query no font matches shows %q", tt.Texts())

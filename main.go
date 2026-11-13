@@ -47,13 +47,13 @@ type App struct {
 	debounceTimer *time.Timer
 	saveMu        sync.Mutex
 
-	Settings         *AppSettings
-	AvailableFonts   []string
-	SelectedFont     string
-	FontPickerText   string
-	FontPickerOpen   bool
-	FontSizeOptions  []string
-	SelectedFontSize string
+	Settings             *AppSettings
+	AvailableFonts       []string
+	SelectedFont         string
+	FontSearch           string
+	TypographyJustOpened bool
+	FontSizeOptions      []string
+	SelectedFontSize     string
 
 	IsDarkMode   bool
 	SelectedDate time.Time
@@ -154,7 +154,7 @@ func NewApp() *App {
 		Settings:                 settings,
 		AvailableFonts:           fonts,
 		SelectedFont:             defaultFont,
-		FontPickerText:           defaultFont,
+		FontSearch:               "",
 		FontSizeOptions:          fontSizeOptions,
 		SelectedFontSize:         fontSize,
 		IsDarkMode:               settings.IsDarkMode,

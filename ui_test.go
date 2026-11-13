@@ -205,7 +205,6 @@ func TestToolbarHasLocalLLMButtonInsteadOfAISummary(t *testing.T) {
 		ActiveProjectIdx: 0,
 		AvailableFonts:   []string{"Sans"},
 		SelectedFont:     "Sans",
-		FontPickerText:   "Sans",
 		FontSizeOptions:  []string{"16"},
 		SelectedFontSize: "16",
 		LocalLLMPhase:    "off",
@@ -230,7 +229,6 @@ func TestToolbarMenusHoldGlobalActions(t *testing.T) {
 		ActiveProjectIdx: 0,
 		AvailableFonts:   []string{"Sans"},
 		SelectedFont:     "Sans",
-		FontPickerText:   "Sans",
 		FontSizeOptions:  []string{"16"},
 		SelectedFontSize: "16",
 		LocalLLMPhase:    "off",
@@ -269,7 +267,6 @@ func TestTypographyPopoverHoldsReadingControls(t *testing.T) {
 		ActiveIdx:        0,
 		AvailableFonts:   []string{"Sans"},
 		SelectedFont:     "Sans",
-		FontPickerText:   "Sans",
 		FontSizeOptions:  []string{"16"},
 		SelectedFontSize: "16",
 	}
@@ -285,24 +282,61 @@ func TestTypographyPopoverHoldsReadingControls(t *testing.T) {
 	}
 }
 
-// TestProjectSidebarHasProjectsAndActions checks the source list holds the
-// projects and the project actions that used to be toolbar buttons.
-func TestProjectSidebarHasProjectsAndActions(t *testing.T) {
+// TestTypographySizeMenuChangesSize checks the pop-up button in the
+// typography popover: a menu of the sizes, checking the one in use.
+func TestTypographySizeMenuChangesSize(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	a := &App{
-		Projects:      []string{"One", "Two"},
-		ActiveProject: "One",
-		Settings:      &AppSettings{},
+		Articles:         []*Article{{Title: "One", FullText: "A passage."}},
+		ActiveIdx:        0,
+		AvailableFonts:   []string{"Sans"},
+		SelectedFont:     "Sans",
+		FontSizeOptions:  []string{"16", "18", "20"},
+		SelectedFontSize: "16",
+		Settings:         &AppSettings{FontFamily: "Sans", FontSize: "16"},
 	}
-	tt := ui.NewTester(func(c *ui.Context) { a.renderProjectsSidebar(c) }, 226, 500)
+	tt := ui.NewTester(func(c *ui.Context) { a.renderFullTextColumn(c) }, 700, 500)
 
-	if !tt.HasText("One") || !tt.HasText("Two") {
-		t.Fatalf("the project list is missing its projects: %q", tt.Texts())
+	if err := tt.Click("Typography"); err != nil {
+		t.Fatal(err)
 	}
-	if err := tt.Click("Project Actions"); err != nil {
+	if err := tt.Click("Font Size"); err != nil {
+		t.Fatal(err)
+	}
+	if menu := tt.Menu(); !slices.Contains(menu, "18") {
+		t.Fatalf("the size menu is %q", menu)
+	}
+	if err := tt.Click("18"); err != nil {
+		t.Fatal(err)
+	}
+	if a.SelectedFontSize != "18" || a.Settings.FontSize != "18" {
+		t.Fatalf("choosing 18 left size %q, saved %q", a.SelectedFontSize, a.Settings.FontSize)
+	}
+	if !a.TypographyOpen {
+		t.Error("choosing a size closed the typography popover")
+	}
+}
+
+// TestProjectMenuSwitchesAndManagesProjects checks the toolbar's project
+// switcher: a pull-down menu of the projects, then their commands.
+func TestProjectMenuSwitchesAndManagesProjects(t *testing.T) {
+	a := &App{
+		Projects:         []string{"One", "Two"},
+		ActiveProject:    "One",
+		ActiveProjectIdx: 0,
+		LocalLLMPhase:    "off",
+		Settings:         &AppSettings{},
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.renderToolbar(c) }, 900, 60)
+
+	if !tt.HasText("One") {
+		t.Fatalf("the project switcher does not name the active project: %q", tt.Texts())
+	}
+	if err := tt.Click("Project"); err != nil {
 		t.Fatal(err)
 	}
 	menu := tt.Menu()
-	for _, item := range []string{"New Project…", "Rename Project…", "Delete Project…"} {
+	for _, item := range []string{"One", "Two", "New Project…", "Rename Project…", "Delete Project…"} {
 		if !slices.Contains(menu, item) {
 			t.Errorf("the project menu does not hold %q: %q", item, menu)
 		}

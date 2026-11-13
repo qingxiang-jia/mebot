@@ -4,106 +4,71 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/qingxiang-jia/go-look/apple"
 )
 
-// fontCombobox shows the font picker: a field that filters fonts as the
-// user types, with the current font scrolled into view when the popup
-// opens.
-func (a *App) fontCombobox(c *ui.Context) {
+// fontChooser is the font panel inside the typography popover: a search
+// field over the family list, as the macOS Fonts panel has, rather than a
+// second popup opened from the first. Each family is drawn in its own face,
+// and the family in use is filled with the accent.
+func (a *App) fontChooser(c *ui.Context) {
 	t := c.Theme()
-	wasOpen := a.FontPickerOpen
 
-	var cb ui.ComboboxParts
-	var arrow ui.Element
-	f := ui.Row(c).Key("fontFamilySelector").
-		AlignItems(ui.Center).Gap(t.Space(1.5)).
-		Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius).
-		Background(t.Surface).Cursor(ui.CursorText).Width(160)
-	f.Children(func() {
-		cb = ui.ComboboxBase(c, &a.FontPickerText)
-		cb.Input.Grow(1).MinWidth(t.Space(25)).Label("Font")
-		arrow = ui.Box(c).Size(t.Space(2.5), t.Space(2.5)).Shrink(0).KeepFocus()
-		arrow.Draw(func(p *ui.Painter, r ui.Rect) {
-			var path ui.Path
-			path.MoveTo(r.X+r.W*0.1, r.Y+r.H*0.3).
-				LineTo(r.X+r.W*0.5, r.Y+r.H*0.7).
-				LineTo(r.X+r.W*0.9, r.Y+r.H*0.3)
-			p.StrokePath(&path, 1.5, t.TextMuted)
-		})
-	})
-
-	switch {
-	case cb.Input.Focused():
-		f.Border(1, t.Accent)
-	case f.Hovered():
-		f.Border(1, t.Border.Mix(t.Text, 0.25))
-	default:
-		f.Border(1, t.Border)
-	}
-
-	openedByClick := false
-	if arrow.Clicked() {
-		open := !cb.Open()
-		cb.SetOpen(open)
-		cb.Input.Focus()
-		openedByClick = open
-	}
-	if !wasOpen && cb.Open() && cb.Input.Clicked() {
-		openedByClick = true
-	}
-	if f.Clicked() {
-		cb.Input.Focus()
-	}
-	if openedByClick {
-		// As choosing a font does: typing replaces the choice, and
-		// filters from its start.
-		cb.Input.SetTextSelection(0, len(a.FontPickerText))
-	}
+	search := ui.TextInput(c.Key("fontSearch"), &a.FontSearch).
+		Placeholder("Search Fonts").Height(apple.ControlHeight).
+		Padding(0, apple.Space).FontSize(apple.FontBody).
+		Background(t.Surface).Border(1, t.Border).Radius(t.Radius).
+		AutoFocus()
+	search.Label("Search Fonts")
 
 	shown := a.AvailableFonts
-	if cb.Filtering() {
-		shown = fontMatches(a.AvailableFonts, a.FontPickerText)
+	if strings.TrimSpace(a.FontSearch) != "" {
+		shown = fontMatches(a.AvailableFonts, a.FontSearch)
 	}
 
-	cb.Popup(func(panel ui.Element) {
-		panel.Margin(t.Space(1), 0, 0, 0).Padding(t.Space(1)).
-			Radius(t.Radius+2).Background(menuFace(t)).
-			Border(1, t.Border).Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18))
+	ui.Scroll(c).FillWidth().Height(150).Children(func() {
 		if len(shown) == 0 {
 			ui.Text(c, "No matching fonts").
-				FontSize(12).
-				TextColor(t.TextMuted).
-				Padding(t.Space(1.5), t.Space(2.5))
+				FontSize(apple.FontBody).TextColor(t.TextMuted).
+				Padding(apple.Space, apple.Space)
 			return
 		}
-		ui.Scroll(c).WidthPercent(100).MaxHeight(t.Space(70)).Children(func() {
+		rows := ui.Column(c).FillWidth().Gap(1)
+		rows.Children(func() {
 			for _, font := range shown {
-				item := cb.Item(font).Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius)
+				row := ui.ButtonBase(c.Key("font-"+font)).Label(font).
+					FillWidth().Height(26).Shrink(0).Radius(t.Radius).
+					Padding(0, apple.Space).AlignItems(ui.Center)
 				switch {
-				case item.Highlighted():
-					item.Background(t.Accent).TextColor(t.AccentText)
 				case font == a.SelectedFont:
-					item.Background(t.Surface)
+					row.Background(t.Accent)
+				case row.Hovered():
+					row.Background(t.SurfaceHover)
 				}
-				if openedByClick && font == a.SelectedFont {
-					item.ScrollIntoView()
+				row.Children(func() {
+					ink := t.Text
+					if font == a.SelectedFont {
+						ink = t.AccentText
+					}
+					ui.Text(c, font).Font(font).FontSize(apple.FontBody).
+						SingleLine().TextColor(ink)
+					ui.Row(c).Grow(1)
+					if font == a.SelectedFont {
+						ui.Icon(c, iconCheck).FontSize(11).TextColor(t.AccentText)
+					}
+				})
+				if a.TypographyJustOpened && font == a.SelectedFont {
+					row.ScrollIntoView()
 				}
-				item.Children(func() { ui.Text(c, font).SingleLine() })
+				if row.Clicked() && a.SelectedFont != font {
+					a.SelectedFont = font
+					a.Settings.FontFamily = font
+					_ = a.Settings.Save()
+				}
 			}
 		})
 	})
-
-	if font, ok := cb.Chosen(); ok {
-		if a.SelectedFont != font {
-			a.SelectedFont = font
-			a.Settings.FontFamily = font
-			_ = a.Settings.Save()
-		}
-		a.FontPickerText = font
-	} else if !cb.Input.Focused() && !cb.Open() && a.FontPickerText != a.SelectedFont {
-		a.FontPickerText = a.SelectedFont
-	}
-	a.FontPickerOpen = cb.Open()
+	a.TypographyJustOpened = false
 }
 
 // fontMatches returns the fonts containing query, ignoring case, those
