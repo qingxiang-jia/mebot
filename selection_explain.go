@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/qingxiang-jia/go-look/apple"
 )
 
 const selectionExplanationDelay = 350 * time.Millisecond
@@ -292,22 +293,25 @@ func (a *App) renderSelectionExplanation(c *ui.Context, source string) {
 	if a.SelectionSource != source || a.SelectionText == "" || a.SelectionClosed || a.LocalLLMPhase != "ready" {
 		return
 	}
+	t := c.Theme()
 
-	ui.Column(c).AlignItems(ui.Stretch).FillWidth().Gap(4).Padding(10).Radius(6).
-		Background(a.Theme.SidebarBg).Border(1, a.Theme.Border).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+	card := ui.Column(c).AlignItems(ui.Stretch).FillWidth().Shrink(0).Gap(6).
+		Padding(apple.SpaceL).Margin(0, apple.SpaceXL, apple.SpaceXL, apple.SpaceXL).
+		Radius(apple.RadiusCard).Background(t.Surface).Border(1, t.Border)
+	card.Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(apple.Space).Children(func() {
 			ui.Text(c, "“"+clipRunes(strings.TrimSpace(a.SelectionText), 120)+"”").
-				Font(a.CurrentFontFamily()).FontSize(11).TextColor(a.Theme.TextMuted).Grow(1)
+				Font(a.CurrentFontFamily()).FontSize(apple.FontSubheadline).
+				TextColor(t.TextMuted).MaxLines(1).Grow(1)
 
-			// As the toast docs close a toast: a button without a look, an
-			// icon, and a hover tint of its own.
-			close := ui.ButtonBase(c).Label("Close explanation").Tooltip("Close explanation").
-				Padding(4).Radius(6)
+			close := ui.ButtonBase(c.Key("close-explanation")).Label("Close explanation").
+				Tooltip("Close explanation").Width(20).Height(20).Padding(0).Shrink(0).
+				Justify(ui.Center).AlignItems(ui.Center).Radius(t.Radius)
 			if close.Hovered() {
-				close.Background(a.Theme.HoverBg)
+				close.Background(t.SurfaceHover)
 			}
 			close.Children(func() {
-				ui.Icon(c, IconClose).Size(12, 12).TextColor(a.Theme.TextMuted)
+				ui.Icon(c, iconClose).FontSize(11).TextColor(t.TextMuted)
 			})
 			if close.Clicked() {
 				a.closeSelectionExplanation()
@@ -319,18 +323,16 @@ func (a *App) renderSelectionExplanation(c *ui.Context, source string) {
 
 		switch {
 		case a.SelectionError != "":
-			ui.Text(c, a.SelectionError).Font(a.CurrentFontFamily()).FontSize(a.CurrentFontSize()).
-				TextColor(ui.Hex("#ff3b30"))
+			ui.Text(c, a.SelectionError).Font(a.CurrentFontFamily()).
+				FontSize(a.CurrentFontSize()).TextColor(t.Danger)
 		case a.SelectionExplanation != "":
-			ui.Text(c, a.SelectionExplanation).Font(a.CurrentFontFamily()).FontSize(a.CurrentFontSize()).
-				Pretty().
-				TextColor(a.Theme.Text)
+			ui.Text(c, a.SelectionExplanation).Font(a.CurrentFontFamily()).
+				FontSize(a.CurrentFontSize()).LineHeight(1.5).Pretty().TextColor(t.Text)
 		default:
-			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(apple.Space).Children(func() {
 				ui.Spinner(c)
-				ui.Text(c, "Explaining...").
-					FontSize(a.CurrentFontSize()).
-					TextColor(a.Theme.TextMuted)
+				ui.Text(c, "Explaining...").FontSize(a.CurrentFontSize()).
+					TextColor(t.TextMuted)
 			})
 		}
 	})

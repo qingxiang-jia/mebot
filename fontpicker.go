@@ -67,7 +67,7 @@ func (a *App) fontCombobox(c *ui.Context) {
 
 	cb.Popup(func(panel ui.Element) {
 		panel.Margin(t.Space(1), 0, 0, 0).Padding(t.Space(1)).
-			Radius(t.Radius+2).Background(t.Background).
+			Radius(t.Radius+2).Background(menuFace(t)).
 			Border(1, t.Border).Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18))
 		if len(shown) == 0 {
 			ui.Text(c, "No matching fonts").

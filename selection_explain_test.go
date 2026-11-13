@@ -75,7 +75,6 @@ func TestSelectionExplanationCard(t *testing.T) {
 		SelectionSource:      "summary",
 		SelectionExplanation: "to review the situation before deciding what to do next",
 		LocalLLMPhase:        "ready",
-		Theme:                MacOSLightTheme(),
 		SelectedFontSize:     "16",
 	}
 	tt := ui.NewTester(func(c *ui.Context) {
@@ -107,7 +106,6 @@ func TestSelectionExplanationCardCanBeClosed(t *testing.T) {
 		SelectionSource:      "summary",
 		SelectionExplanation: "to review the situation before deciding what to do next",
 		LocalLLMPhase:        "ready",
-		Theme:                MacOSLightTheme(),
 		SelectedFontSize:     "16",
 	}
 	tt := ui.NewTester(func(c *ui.Context) {
@@ -134,7 +132,6 @@ func TestFullTextSelectionIsObserved(t *testing.T) {
 		Articles:      []*Article{{Title: "One", FullText: text}},
 		ActiveIdx:     0,
 		LocalLLMPhase: "off",
-		Theme:         MacOSLightTheme(),
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderFullTextColumn(c) }, 700, 500)
 

@@ -17,7 +17,6 @@ func articleListApp() (*App, func(c *ui.Context)) {
 			{Title: "Second"},
 		},
 		ActiveIdx: -1,
-		Theme:     MacOSLightTheme(),
 	}
 	a.ArticleListState.Selected = &a.ActiveIdx
 	a.ArticleListState.Selection = &a.ChosenArticles
@@ -104,7 +103,6 @@ func TestSummaryPreviewMenuIsDrawn(t *testing.T) {
 		Articles:           []*Article{{Title: "One", Summary: "hello world"}},
 		ActiveIdx:          0,
 		ShowMarkdownRender: true,
-		Theme:              MacOSLightTheme(),
 		mdOpts:             markdown.Options{ShareSelection: true},
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 500, 400)
@@ -132,7 +130,6 @@ func TestAISummaryStreamsIntoSummaryPane(t *testing.T) {
 		AISummaryRunning: true,
 		AISummaryOutput:  "A live summary is arriving.",
 		LocalLLMPhase:    "ready",
-		Theme:            MacOSLightTheme(),
 		mdOpts:           markdown.Options{ShareSelection: true},
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 700, 400)
@@ -161,7 +158,6 @@ func TestAISummaryButtonDisabledWhenLocalLLMOff(t *testing.T) {
 		AISummaryArticle:   -1,
 		ShowMarkdownRender: true,
 		LocalLLMPhase:      "off",
-		Theme:              MacOSLightTheme(),
 		mdOpts:             markdown.Options{ShareSelection: true},
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 700, 400)
@@ -185,7 +181,6 @@ func TestAISummaryButtonDisabledWhileLocalLLMChecks(t *testing.T) {
 		AISummaryArticle:   -1,
 		ShowMarkdownRender: true,
 		LocalLLMPhase:      "checking",
-		Theme:              MacOSLightTheme(),
 		mdOpts:             markdown.Options{ShareSelection: true},
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderSummaryColumn(c) }, 900, 400)
@@ -214,7 +209,6 @@ func TestToolbarHasLocalLLMButtonInsteadOfAISummary(t *testing.T) {
 		FontSizeOptions:  []string{"16"},
 		SelectedFontSize: "16",
 		LocalLLMPhase:    "off",
-		Theme:            MacOSLightTheme(),
 	}
 	tt := ui.NewTester(func(c *ui.Context) { a.renderToolbar(c) }, 1600, 60)
 
@@ -226,29 +220,91 @@ func TestToolbarHasLocalLLMButtonInsteadOfAISummary(t *testing.T) {
 	}
 }
 
-// TestToolbarOverflows checks that the toolbar mygo builds puts the
-// controls it has no room for in its menu, labeled by the controls' text.
-func TestToolbarOverflows(t *testing.T) {
+// TestToolbarMenusHoldGlobalActions checks where the toolbar's grouped
+// actions live: import has its own menu, and More holds the appearance
+// toggle and Settings.
+func TestToolbarMenusHoldGlobalActions(t *testing.T) {
 	a := &App{
 		Projects:         []string{"One", "Two"},
+		ActiveProject:    "One",
 		ActiveProjectIdx: 0,
 		AvailableFonts:   []string{"Sans"},
 		SelectedFont:     "Sans",
 		FontPickerText:   "Sans",
 		FontSizeOptions:  []string{"16"},
 		SelectedFontSize: "16",
-		Theme:            MacOSLightTheme(),
+		LocalLLMPhase:    "off",
 	}
-	tt := ui.NewTester(func(c *ui.Context) { a.renderToolbar(c) }, 320, 60)
+	tt := ui.NewTester(func(c *ui.Context) { a.renderToolbar(c) }, 1600, 60)
 
-	if !tt.HasText("More") {
-		t.Fatalf("a narrow toolbar shows no overflow button: %q", tt.Texts())
+	if !tt.HasText("Local LLM") {
+		t.Fatalf("the toolbar has no local LLM button: %q", tt.Texts())
 	}
-	if err := tt.Click("More"); err != nil {
+	if err := tt.Click("Import"); err != nil {
 		t.Fatal(err)
 	}
 	menu := tt.Menu()
-	if !slices.Contains(menu, "Settings") {
-		t.Fatalf("the overflow menu does not hold Settings: %q", menu)
+	for _, item := range []string{"Import HTML…", "Import Markdown Rollup…", "Match Pasted Summaries…"} {
+		if !slices.Contains(menu, item) {
+			t.Errorf("the import menu does not hold %q: %q", item, menu)
+		}
+	}
+
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	menu = tt.Menu()
+	for _, item := range []string{"Dark Mode", "Settings…"} {
+		if !slices.Contains(menu, item) {
+			t.Errorf("the More menu does not hold %q: %q", item, menu)
+		}
+	}
+}
+
+// TestTypographyPopoverHoldsReadingControls checks that the Aa control in
+// the reading pane still holds the font family and size controls.
+func TestTypographyPopoverHoldsReadingControls(t *testing.T) {
+	a := &App{
+		Articles:         []*Article{{Title: "One", FullText: "A passage."}},
+		ActiveIdx:        0,
+		AvailableFonts:   []string{"Sans"},
+		SelectedFont:     "Sans",
+		FontPickerText:   "Sans",
+		FontSizeOptions:  []string{"16"},
+		SelectedFontSize: "16",
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.renderFullTextColumn(c) }, 700, 500)
+
+	if err := tt.Click("Typography"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Reading Type", "Font", "Size"} {
+		if !tt.HasText(want) {
+			t.Errorf("the typography popover is missing %q: %q", want, tt.Texts())
+		}
+	}
+}
+
+// TestProjectSidebarHasProjectsAndActions checks the source list holds the
+// projects and the project actions that used to be toolbar buttons.
+func TestProjectSidebarHasProjectsAndActions(t *testing.T) {
+	a := &App{
+		Projects:      []string{"One", "Two"},
+		ActiveProject: "One",
+		Settings:      &AppSettings{},
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.renderProjectsSidebar(c) }, 226, 500)
+
+	if !tt.HasText("One") || !tt.HasText("Two") {
+		t.Fatalf("the project list is missing its projects: %q", tt.Texts())
+	}
+	if err := tt.Click("Project Actions"); err != nil {
+		t.Fatal(err)
+	}
+	menu := tt.Menu()
+	for _, item := range []string{"New Project…", "Rename Project…", "Delete Project…"} {
+		if !slices.Contains(menu, item) {
+			t.Errorf("the project menu does not hold %q: %q", item, menu)
+		}
 	}
 }

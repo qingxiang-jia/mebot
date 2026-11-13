@@ -31,8 +31,11 @@ type App struct {
 	ArticleListState ui.ListState
 	ChosenArticles   ui.Selection[int]
 
-	SidebarWidth float32
-	ReaderWidth  float32
+	SidebarWidth  float32
+	ReaderPercent float32
+
+	WindowMaximized bool
+	TypographyOpen  bool
 
 	SummaryDoc         *richtext.Document
 	LastSummaryText    string
@@ -52,7 +55,6 @@ type App struct {
 	FontSizeOptions  []string
 	SelectedFontSize string
 
-	Theme        MacOSTheme
 	IsDarkMode   bool
 	SelectedDate time.Time
 
@@ -140,11 +142,6 @@ func NewApp() *App {
 		fontSize = "16"
 	}
 
-	theme := MacOSLightTheme()
-	if settings.IsDarkMode {
-		theme = MacOSDarkTheme()
-	}
-
 	fontSizeOptions := []string{"12", "13", "14", "15", "16", "17", "18", "20", "22", "24", "28", "32"}
 
 	app := &App{
@@ -152,15 +149,14 @@ func NewApp() *App {
 		Articles:                 []*Article{},
 		ActiveIdx:                0,
 		LastActiveIdx:            -1,
-		SidebarWidth:             320,
-		ReaderWidth:              680,
+		SidebarWidth:             292,
+		ReaderPercent:            54,
 		Settings:                 settings,
 		AvailableFonts:           fonts,
 		SelectedFont:             defaultFont,
 		FontPickerText:           defaultFont,
 		FontSizeOptions:          fontSizeOptions,
 		SelectedFontSize:         fontSize,
-		Theme:                    theme,
 		IsDarkMode:               settings.IsDarkMode,
 		SelectedDate:             time.Now(),
 		ExportDirectory:          settings.ExportDirectory,
@@ -820,10 +816,8 @@ func (a *App) ToggleTheme() {
 	_ = a.Settings.Save()
 
 	if a.IsDarkMode {
-		a.Theme = MacOSDarkTheme()
 		mygo.Theme.SetSource(mygo.ThemeDark)
 	} else {
-		a.Theme = MacOSLightTheme()
 		mygo.Theme.SetSource(mygo.ThemeLight)
 	}
 }
@@ -1009,52 +1003,6 @@ func (a *App) StopLocalLLM() {
 	}()
 }
 
-// renderLocalLLMButton is the toolbar power switch. Its icon is green while
-// the local model is running and red while it is off.
-func (a *App) renderLocalLLMButton(c *ui.Context) {
-	color := ui.Hex("#ff3b30")
-	tooltip := "Turn On Local LLM"
-	busy := a.LocalLLMPhase == "checking" || a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "stopping"
-
-	switch a.LocalLLMPhase {
-	case "ready":
-		color = ui.Hex("#34c759")
-		tooltip = "Turn Off Local LLM"
-	case "checking":
-		color = ui.Hex("#ff9f0a")
-		tooltip = "Checking Local LLM status"
-	case "starting":
-		color = ui.Hex("#ff9f0a")
-		tooltip = "Local LLM is starting"
-	case "stopping":
-		color = ui.Hex("#ff9f0a")
-		tooltip = "Local LLM is stopping"
-	case "error":
-		tooltip = "Local LLM error; click to try again"
-	}
-
-	button := ui.Button(c, "").
-		Tooltip(tooltip).
-		Disabled(busy).
-		Gap(6).
-		Children(func() {
-			ui.Icon(c, IconPower).Size(14, 14).TextColor(color)
-			ui.Text(c, "Local LLM").SingleLine()
-		})
-
-	if !button.Clicked() {
-		return
-	}
-	switch a.LocalLLMPhase {
-	case "ready":
-		a.StopLocalLLM()
-	case "checking", "starting", "stopping":
-		// The running action will settle the state.
-	default:
-		a.StartLocalLLM()
-	}
-}
-
 func (a *App) StartAISummary() {
 	if a.aiCancel != nil {
 		return
@@ -1220,635 +1168,6 @@ func (a *App) SaveSettingsModal() {
 	a.ShowSettingsModal = false
 }
 
-// ---------------- UI VIEW ----------------
-
-func (a *App) View(c *ui.Context) {
-	// Sync accent across all native widgets
-	t := *c.Theme()
-	t.Accent = a.Theme.ActiveRowBg
-	t.AccentText = a.Theme.ActiveRowText
-	c.SetTheme(&t)
-	// Draw every popup menu in the window, in Mebot's look: the editors'
-	// and selectable text's editing menus included, not only the menus
-	// built with PopoverMenu.
-	c.SetMenuPresentation(ui.PopoverMenus)
-
-	if a.ActiveIdx != a.LastActiveIdx && a.ActiveIdx >= 0 && a.ActiveIdx < len(a.Articles) {
-		a.SelectArticle(a.ActiveIdx)
-		c.Invalidate()
-	}
-
-	ui.Column(c).Fill().Background(a.Theme.WindowBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		// 1. Toolbar
-		a.renderToolbar(c)
-
-		// 1px separator line matching split view border
-		ui.Row(c).Height(1).FillWidth().Background(a.Theme.Border)
-
-		// 2. Resizable Split Panes
-		ui.Split(c, &a.SidebarWidth, func() {
-			a.renderArticleListColumn(c)
-		}, func() {
-			ui.Split(c, &a.ReaderWidth, func() {
-				a.renderFullTextColumn(c)
-			}, func() {
-				a.renderSummaryColumn(c)
-			}).SplitReset(680).Fill()
-		}).SplitReset(320).Grow(1)
-
-		// 3. Modals & Native Dialogs
-		a.renderModals(c)
-	})
-}
-
-func (a *App) renderToolbar(c *ui.Context) {
-	ui.Toolbar(c, func() {
-		// Group 1: Projects
-		if len(a.Projects) > 1 {
-			prevIdx := a.ActiveProjectIdx
-			ui.Segmented(c.Key("projectSegment"), &a.ActiveProjectIdx, a.Projects...).Label("Projects")
-			if a.ActiveProjectIdx != prevIdx && a.ActiveProjectIdx < len(a.Projects) {
-				a.SwitchProject(a.Projects[a.ActiveProjectIdx])
-			}
-		} else if len(a.Projects) == 1 {
-			ui.Text(c, a.Projects[0]).FontSize(13).TextColor(a.Theme.Text)
-		}
-
-		if ui.Button(c, "").
-			Tooltip("New Project").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconAdd).Size(14, 14)
-				ui.Text(c, "New").SingleLine()
-			}).Clicked() {
-			a.ShowNewProjectModal = true
-		}
-
-		if len(a.Projects) > 0 {
-			if ui.Button(c, "").
-				Tooltip("Rename Current Project").
-				Gap(6).
-				Children(func() {
-					ui.Image(c, IconEdit).Size(14, 14)
-					ui.Text(c, "Rename").SingleLine()
-				}).Clicked() {
-				a.RenameProjectName = a.ActiveProject
-				a.ShowRenameProjectModal = true
-			}
-
-			if ui.Button(c, "").
-				Tooltip("Delete Current Project").
-				Gap(6).
-				Children(func() {
-					ui.Image(c, IconTrash).Size(14, 14)
-					ui.Text(c, "Delete").SingleLine()
-				}).Clicked() {
-				a.ShowDeleteProjectConfirm = true
-			}
-		}
-
-		ui.Divider(c)
-
-		// Group 2: Article Actions
-		if ui.Button(c, "").
-			Tooltip("Import HTML Article(s)").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconImport).Size(14, 14)
-				ui.Text(c, "Import HTML").SingleLine()
-			}).Clicked() {
-			a.ImportHTMLFiles()
-		}
-
-		if ui.Button(c, "").
-			Tooltip("Import Markdown Rollup").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconDocument).Size(14, 14)
-				ui.Text(c, "Import MD").SingleLine()
-			}).Clicked() {
-			a.ImportMarkdownFile()
-		}
-
-		if ui.Button(c, "").
-			Tooltip("Match Pasted Summaries by Title").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconPaste).Size(14, 14)
-				ui.Text(c, "Match").SingleLine()
-			}).Clicked() {
-			a.OpenBatchSummaryModal()
-		}
-
-		a.renderLocalLLMButton(c)
-
-		if ui.Button(c, "").
-			Tooltip("Export Weekly Rollup").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconExport).Size(14, 14)
-				ui.Text(c, "Export").SingleLine()
-			}).Clicked() {
-			a.ShowExportModal = true
-		}
-
-		ui.Spacer(c)
-
-		if a.IsDirty {
-			ui.Text(c, "Saving...").FontSize(11).TextColor(a.Theme.Accent)
-		} else if a.LastSavedAt != "" {
-			ui.Text(c, "Saved "+a.LastSavedAt).FontSize(11).TextColor(a.Theme.TextMuted)
-		}
-
-		ui.Divider(c)
-
-		// Group 3: Typography & Theme
-		ui.Text(c, "Font:").FontSize(11).TextColor(a.Theme.TextMuted)
-		if len(a.AvailableFonts) > 0 {
-			a.fontCombobox(c)
-		}
-
-		ui.Text(c, "Size:").FontSize(11).TextColor(a.Theme.TextMuted)
-		prevSize := a.SelectedFontSize
-		ui.Select(c.Key("fontSizeSelector"), &a.SelectedFontSize, a.FontSizeOptions).Width(60)
-		if a.SelectedFontSize != prevSize {
-			a.Settings.FontSize = a.SelectedFontSize
-			_ = a.Settings.Save()
-		}
-
-		ui.Divider(c)
-
-		themeIcon := IconSun
-		themeText := "Light"
-		themeTip := "Switch to Light Mode"
-		if !a.IsDarkMode {
-			themeIcon = IconMoon
-			themeText = "Dark"
-			themeTip = "Switch to Dark Mode"
-		}
-		if ui.Button(c, "").
-			Tooltip(themeTip).
-			Gap(6).
-			Children(func() {
-				ui.Image(c, themeIcon).Size(14, 14)
-				ui.Text(c, themeText).SingleLine()
-			}).Clicked() {
-			a.ToggleTheme()
-		}
-
-		ui.Divider(c)
-
-		if ui.Button(c, "").
-			Tooltip("Settings").
-			Gap(6).
-			Children(func() {
-				ui.Image(c, IconSettings).Size(14, 14)
-				ui.Text(c, "Settings").SingleLine()
-			}).Clicked() {
-			a.OpenSettingsModal()
-		}
-	}).Label("Mebot Toolbar")
-}
-
-func (a *App) renderArticleListColumn(c *ui.Context) {
-	ui.Column(c).Fill().Padding(8).Gap(8).Background(a.Theme.SidebarBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
-			if ui.Button(c, "").Tooltip("Delete Selected Article(s)").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Image(c, IconTrash).Size(14, 14)
-			}).Clicked() {
-				if a.ChosenArticles.Len() > 0 || a.CurrentArticle() != nil {
-					a.ShowDeleteArticleConfirm = true
-				}
-			}
-			if ui.Button(c, "").Tooltip("Copy Selected Titles").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Image(c, IconCopy).Size(14, 14)
-			}).Clicked() {
-				a.CopySelectedTitles()
-			}
-			if ui.Button(c, "").Tooltip("Copy Selected Content").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Image(c, IconPaste).Size(14, 14)
-			}).Clicked() {
-				a.CopySelectedContents()
-			}
-			if ui.Button(c, "").Tooltip("Copy Selected Summaries").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Image(c, IconDocument).Size(14, 14)
-			}).Clicked() {
-				a.CopySelectedSummaries()
-			}
-
-			ui.Spacer(c)
-
-			if ui.Button(c, "").Tooltip("Select All").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Image(c, IconSelectAll).Size(14, 14)
-			}).Clicked() {
-				a.SelectAllArticles()
-			}
-			if ui.Button(c, "").Tooltip("Clear Selection").Border(1, a.Theme.Border).Radius(6).Children(func() {
-				ui.Image(c, IconSelectNone).Size(14, 14)
-			}).Clicked() {
-				a.ClearArticleSelection()
-			}
-		})
-
-		ui.List(c, &a.ArticleListState, len(a.Articles), func(i int) {
-			art := a.Articles[i]
-			isCurrent := (i == a.ActiveIdx)
-
-			row := ui.Row(c).Padding(6, 10).Radius(5)
-			if isCurrent {
-				row.Background(a.Theme.ActiveRowBg)
-			}
-			row.PopoverMenu(a.buildArticleMenu)
-
-			row.Children(func() {
-				t := ui.Text(c, art.Title).
-					Font(a.CurrentFontFamily()).
-					FontSize(13).
-					Grow(1)
-
-				if isCurrent {
-					t.Bold().TextColor(a.Theme.ActiveRowText)
-				} else {
-					t.TextColor(a.Theme.Text)
-				}
-			})
-		}).Grow(1).Children(func() {
-			if len(a.Articles) == 0 {
-				ui.Text(c, "No articles yet.").FontSize(12).TextColor(a.Theme.TextMuted).Padding(16)
-			}
-		})
-	})
-}
-
-func (a *App) renderFullTextColumn(c *ui.Context) {
-	current := a.CurrentArticle()
-	ui.Column(c).Fill().Padding(20).Gap(12).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		ui.Text(c, "FULL TEXT").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-
-		if current == nil {
-			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
-			return
-		}
-
-		ui.Text(c, current.Title).
-			Font(a.CurrentFontFamily()).
-			FontSize(a.CurrentFontSize() + 4).
-			Bold().
-			Balance().
-			TextColor(a.Theme.Text)
-
-		ui.Scroll(c).Grow(1).Children(func() {
-			box := ui.Column(c).Selectable().FillWidth()
-			box.Children(func() {
-				ui.Text(c, current.FullText).
-					Font(a.CurrentFontFamily()).
-					FontSize(a.CurrentFontSize()).
-					TextColor(a.Theme.Text)
-			})
-			a.observeSelection(box, "fulltext")
-		})
-
-		a.renderSelectionExplanation(c, "fulltext")
-	})
-}
-
-func (a *App) renderSummaryColumn(c *ui.Context) {
-	current := a.CurrentArticle()
-	running := a.AISummaryRunning && current != nil && a.AISummaryArticle == a.ActiveIdx
-	ui.Column(c).Fill().Padding(16).Gap(10).Background(a.Theme.CardBg).Justify(ui.Start).AlignItems(ui.Stretch).Children(func() {
-		wasPreview := a.ShowMarkdownRender
-		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "SUMMARY").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-			ui.Spacer(c)
-
-			ui.Switch(c.Key("summaryPreviewSwitch"), &a.ShowMarkdownRender).Tooltip("Toggle Markdown Preview")
-			ui.Text(c, "Preview").FontSize(11).TextColor(a.Theme.TextMuted)
-
-			if running {
-				ui.Spinner(c)
-			}
-
-			aiTip := "Generate a summary for this article with Local AI"
-			if a.LocalLLMPhase != "ready" {
-				aiTip = "Turn on Local LLM to generate summaries"
-			} else if current == nil {
-				aiTip = "Select an article to summarize"
-			} else if running {
-				aiTip = "Summarizing this article..."
-			}
-			if ui.Button(c, "").
-				Tooltip(aiTip).
-				Disabled(a.LocalLLMPhase != "ready" || current == nil || running).
-				Gap(6).
-				Children(func() {
-					ui.Image(c, IconSparkle).Size(14, 14)
-					ui.Text(c, "AI Summary").SingleLine()
-				}).Clicked() {
-				a.StartAISummary()
-			}
-
-			if running {
-				if ui.Button(c, "Cancel").Border(1, a.Theme.Border).Radius(6).Clicked() {
-					a.cancelArticleAISummary()
-				}
-			}
-		})
-
-		if a.AISummaryError != "" {
-			ui.Text(c, a.AISummaryError).FontSize(11).TextColor(ui.Hex("#ff3b30"))
-		}
-
-		// Turning the preview on shows what was just typed, which the
-		// rich-text editor holds as runs until it is written back.
-		if a.ShowMarkdownRender && !wasPreview && current != nil && a.SummaryDoc != nil {
-			current.Summary = a.currentSummaryMarkdown()
-		}
-
-		if current == nil {
-			ui.Text(c, "No article selected.").TextColor(a.Theme.TextMuted)
-			return
-		}
-
-		if !a.ShowMarkdownRender && wasPreview && a.SelectionSource == "summary" {
-			a.clearSelectionExplanation()
-		}
-
-		if a.mdOpts.Theme == nil {
-			a.mdOpts.Theme = &markdown.Theme{}
-		}
-		a.mdOpts.Theme.Font = a.CurrentFontFamily()
-		a.mdOpts.Theme.FontSize = a.CurrentFontSize()
-		// Lift links above the body text, so they still read as links where
-		// the accent color alone is hard to tell from the text.
-		a.mdOpts.Theme.LinkWeight = 500
-
-		if running {
-			ui.Scroll(c).Grow(1).Children(func() {
-				if strings.TrimSpace(a.AISummaryOutput) == "" {
-					ui.Text(c, "Waiting for the local LLM...").
-						FontSize(a.CurrentFontSize()).
-						TextColor(a.Theme.TextMuted)
-					return
-				}
-				markdown.View(c, a.AISummaryOutput, &a.mdOpts)
-			})
-		} else if a.ShowMarkdownRender {
-			ui.Scroll(c).Grow(1).Children(func() {
-				// The window draws all its menus, and this box's adds the
-				// summary's own Copy Summary as Markdown item.
-				box := ui.Column(c).Selectable().PopoverMenu(func(m *ui.Menu) {
-					m.EditItems()
-					m.Separator()
-					if m.Item("Copy Summary as Markdown").Chosen() {
-						writeClipboardText(current.Summary)
-					}
-				})
-				box.Children(func() {
-					markdown.View(c, current.Summary, &a.mdOpts)
-				})
-				a.observeSelection(box, "summary")
-			})
-		} else {
-			if a.SummaryDoc != nil {
-				view := richtext.EditorBase(c.Key(fmt.Sprintf("summaryMarkdownEditor_%d", a.ActiveIdx)), a.SummaryDoc, richtext.EditorOptions{
-					Label:       "Summary",
-					Placeholder: "Write the summary in Markdown...",
-					Font:        ui.Font{Family: a.CurrentFontFamily(), Size: a.CurrentFontSize()},
-				}).Grow(1).FillWidth()
-
-				if view.Changed() {
-					latestText := a.currentSummaryMarkdown()
-					if latestText != a.LastSummaryText {
-						a.LastSummaryText = latestText
-						current.Summary = latestText
-						a.TriggerDebouncedSave()
-					}
-				}
-			}
-		}
-
-		a.renderSelectionExplanation(c, "summary")
-	})
-}
-
-// Native Modals using ui.AlertDialog and ui.Modal
-func (a *App) renderModals(c *ui.Context) {
-	// 1. Delete Project Alert Dialog
-	if a.ShowDeleteProjectConfirm {
-		msg := fmt.Sprintf("Are you sure you want to delete '%s' and all its articles?", a.ActiveProject)
-		switch ui.AlertDialog(c, &a.ShowDeleteProjectConfirm, "Delete Project", msg, "Cancel", "Delete") {
-		case 1:
-			a.DeleteActiveProject()
-		}
-	}
-
-	// 2. Delete Article Alert Dialog
-	if a.ShowDeleteArticleConfirm {
-		count := a.ChosenArticles.Len()
-		msg := "Are you sure you want to delete the selected article?"
-		if count > 1 {
-			msg = fmt.Sprintf("Are you sure you want to delete all %d selected articles?", count)
-		} else if cur := a.CurrentArticle(); cur != nil {
-			msg = fmt.Sprintf("Are you sure you want to delete '%s'?", cur.Title)
-		}
-
-		switch ui.AlertDialog(c, &a.ShowDeleteArticleConfirm, "Delete Article", msg, "Cancel", "Delete") {
-		case 1:
-			a.ConfirmDeleteChosenArticles()
-		}
-	}
-
-	// 3. New Project Modal
-	ui.Modal(c, &a.ShowNewProjectModal, func() {
-		ui.Text(c, "New Project").FontSize(16).Bold().TextColor(a.Theme.Text)
-		if ui.TextInput(c.Key("newProjInput"), &a.NewProjectName).AutoFocus().Placeholder("Project name...").Submitted() {
-			a.CreateProject(a.NewProjectName)
-		}
-		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-			if ui.Button(c, "Cancel").Clicked() {
-				a.ShowNewProjectModal = false
-			}
-			if ui.PrimaryButton(c, "Create").Clicked() {
-				a.CreateProject(a.NewProjectName)
-			}
-		})
-	})
-
-	// 4. Rename Project Modal
-	ui.Modal(c, &a.ShowRenameProjectModal, func() {
-		ui.Text(c, "Rename Project").FontSize(16).Bold().TextColor(a.Theme.Text)
-		if ui.TextInput(c.Key("renameProjInput"), &a.RenameProjectName).AutoFocus().Placeholder("New project name...").Submitted() {
-			a.RenameActiveProject(a.RenameProjectName)
-		}
-		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-			if ui.Button(c, "Cancel").Clicked() {
-				a.ShowRenameProjectModal = false
-			}
-			if ui.PrimaryButton(c, "Rename").Clicked() {
-				a.RenameActiveProject(a.RenameProjectName)
-			}
-		})
-	})
-
-	// 5. Export Modal
-	ui.Modal(c, &a.ShowExportModal, func() {
-		ui.Text(c, "Export Weekly Rollup").FontSize(16).Bold().TextColor(a.Theme.Text)
-
-		dateLabel := ui.Text(c, "Select Export Date:").FontSize(11).TextColor(a.Theme.TextMuted)
-		// Browsing months with the keyboard or the arrows only moves the
-		// calendar until the user clicks a day, so the export date doesn't
-		// change while looking around.
-		ui.Calendar(c, &a.SelectedDate).Browse().LabelledBy(dateLabel)
-
-		exportName := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
-
-		folderLabel := ui.Text(c, "Destination Folder:").FontSize(11).TextColor(a.Theme.TextMuted)
-		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
-			ui.TextInput(c.Key("exportDirInput"), &a.ExportDirectory).Grow(1).LabelledBy(folderLabel)
-			if ui.Button(c, "Browse...").Border(1, a.Theme.Border).Radius(6).Clicked() {
-				a.BrowseExportDirectory()
-			}
-		})
-
-		destPath := filepath.Join(a.ExportDirectory, exportName)
-		ui.Text(c, "File: "+exportName).FontSize(11).Bold().TextColor(a.Theme.Accent)
-
-		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-			if ui.Button(c, "Cancel").Clicked() {
-				a.ShowExportModal = false
-			}
-			if ui.PrimaryButton(c, "Export").Clicked() {
-				a.PerformExportTo(destPath)
-			}
-		})
-	})
-
-	// 6. Batch AI Summary Matcher Modal
-	ui.Modal(c, &a.ShowBatchSummaryModal, func() {
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Match Markdown Summaries").FontSize(16).Bold().TextColor(a.Theme.Text)
-			ui.Spacer(c)
-			if a.BatchMatchingStep == 1 {
-				if ui.Button(c, "Back to Edit").Clicked() {
-					a.BatchMatchingStep = 0
-				}
-			}
-		})
-
-		emptyCount := 0
-		for _, art := range a.Articles {
-			if IsSummaryEmpty(art.Summary) {
-				emptyCount++
-			}
-		}
-
-		if a.BatchMatchingStep == 0 {
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Paste your markdown summaries below:").FontSize(12).TextColor(a.Theme.TextMuted)
-				ui.Spacer(c)
-				ui.Text(c, fmt.Sprintf("Project has %d articles (%d without summary)", len(a.Articles), emptyCount)).
-					FontSize(11).TextColor(a.Theme.Accent)
-			})
-
-			ui.TextArea(c.Key("batchAreaInput"), &a.BatchPastedMarkdown).
-				Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
-				Height(280).
-				Grow(1)
-
-			ui.Checkbox(c.Key("batchIncludeExistingCheck"), &a.BatchIncludeExisting, "Include articles that already have summaries")
-
-			if a.BatchMatchError != "" {
-				ui.Text(c, a.BatchMatchError).FontSize(12).Bold().TextColor(ui.Hex("#ff3b30"))
-			}
-
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowBatchSummaryModal = false
-				}
-				if ui.PrimaryButton(c, "Analyze & Match").Clicked() {
-					a.AnalyzeBatchMarkdown()
-				}
-			})
-		} else {
-			ui.Text(c, "Verify or adjust the matched articles. Any option set to '[Do Not Match]' will be skipped.").
-				FontSize(12).TextColor(a.Theme.TextMuted)
-
-			ui.Scroll(c).Grow(1).Children(func() {
-				ui.Column(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
-					for i := range a.ParsedSummaryMatches {
-						item := &a.ParsedSummaryMatches[i]
-
-						ui.Column(c).
-							Padding(10).
-							Radius(6).
-							Background(a.Theme.SidebarBg).
-							Border(1, a.Theme.Border).
-							Gap(6).
-							Children(func() {
-								ui.Text(c, "Summary Title: "+item.RawTitle).
-									FontSize(13).Bold().TextColor(a.Theme.Text)
-
-								excerpt := item.Body
-								if len([]rune(excerpt)) > 120 {
-									excerpt = string([]rune(excerpt)[:120]) + "..."
-								}
-								ui.Text(c, excerpt).FontSize(11).TextColor(a.Theme.TextMuted)
-
-								ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-									ui.Text(c, "Assign to:").FontSize(11).Bold().TextColor(a.Theme.TextMuted)
-									ui.Select(c.Key(fmt.Sprintf("assignSel_%d", i)), &item.SelectedOption, a.UnmatchedOptions).Width(340)
-								})
-							})
-					}
-				})
-			})
-
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowBatchSummaryModal = false
-				}
-				if ui.PrimaryButton(c, "Apply All Matches").Clicked() {
-					a.ApplyBatchMatches()
-				}
-			})
-		}
-	})
-
-	// 7. Settings Modal
-	ui.Modal(c, &a.ShowSettingsModal, func() {
-		ui.Column(c).Width(520).Gap(12).Children(func() {
-			ui.Text(c, "Settings").FontSize(16).Bold().TextColor(a.Theme.Text)
-
-			ui.Text(c, "Local AI").FontSize(11).TextColor(a.Theme.TextMuted)
-			ui.Text(c, fmt.Sprintf("%s • %s", DefaultLocalLLMModel, LocalLLMBaseURL)).
-				FontSize(12).TextColor(a.Theme.Text)
-
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Summary prompt").FontSize(11).TextColor(a.Theme.TextMuted)
-				ui.Spacer(c)
-				if ui.Button(c, "Reset to default").Border(1, a.Theme.Border).Radius(6).Clicked() {
-					a.SettingsDraftPrompt = DefaultSummaryPrompt
-				}
-			})
-			ui.TextArea(c.Key("summaryPromptInput"), &a.SettingsDraftPrompt).
-				Placeholder(DefaultSummaryPrompt).
-				Height(140).
-				Grow(1)
-
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
-					a.ShowSettingsModal = false
-				}
-				if ui.PrimaryButton(c, "Save Settings").Clicked() {
-					a.SaveSettingsModal()
-					c.Toast("Settings saved")
-				}
-			})
-		})
-	})
-
-}
-
 func main() {
 	os.Setenv("MYGO_GPU", "0")
 	debug.SetGCPercent(40)
@@ -1857,12 +1176,16 @@ func main() {
 
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:   "Mebot",
-			Width:   1760,
-			Height:  1000,
-			Hidden:  true,
-			Content: ui.View(app.View),
+			Title:       "Mebot",
+			Width:       1600,
+			Height:      1000,
+			MinWidth:    1280,
+			MinHeight:   760,
+			Frameless:   true,
+			Transparent: true,
+			Content:     ui.View(app.View),
 		})
+		app.prepareWindow(win)
 		// Show the window only once its first frame is drawn, instead of
 		// opening blank and filling in.
 		win.OnReadyToShow(win.Show)

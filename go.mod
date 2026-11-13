@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/egoist/mygo v0.9.0
 	github.com/markusmobius/go-trafilatura/v2 v2.2.6
+	github.com/qingxiang-jia/go-look v0.0.0
 )
 
 require (
@@ -31,3 +32,5 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
+
+replace github.com/qingxiang-jia/go-look => ../go-look
