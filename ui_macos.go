@@ -46,7 +46,10 @@ func appleInk(t *ui.Theme, name string) ui.Color {
 	return t.Background
 }
 
-func menuFace(t *ui.Theme) ui.Color { return appleInk(t, "Menu") }
+// menuFace is the HIG menu material: Apple's near-white gray in the light
+// appearance, not the white it would merge with on a white card, and the
+// opaque charcoal in the dark. The library's Popover theme carries it.
+func menuFace(t *ui.Theme) ui.Color { return apple.Popover(t).Background }
 
 // A macOS popover is rounded 12 points; apple.RadiusPopover is a menu's 6.
 const popoverRadius = 12

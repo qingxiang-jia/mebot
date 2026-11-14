@@ -6,7 +6,21 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/qingxiang-jia/go-look/apple"
 )
+
+// TestMenuFaceUsesTheHIGMenuMaterial checks that menus take the library's
+// menu material. In the light appearance that is the HIG's near-white gray,
+// not the white text background, which would merge with the cards behind a
+// menu and leave it edged only by its shadow.
+func TestMenuFaceUsesTheHIGMenuMaterial(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		th := appTheme(dark)
+		if got, want := menuFace(th), apple.Popover(th).Background; got != want {
+			t.Errorf("dark=%v: menu face %v, want the HIG menu material %v", dark, got, want)
+		}
+	}
+}
 
 // articleListApp builds the list of the sidebar, with the menu its rows
 // open, and the bare state those need, without files or settings.
