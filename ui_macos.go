@@ -60,10 +60,32 @@ const popoverRadius = 12
 // shadow, not inside a white frame. The dark appearance keeps the one
 // hairline that separates it from the window behind it.
 func menuPanel(t *ui.Theme) func(ui.Element) {
+	return panelFace(t, apple.RadiusPopover)
+}
+
+// popoverPanel is the same surface with a popover's 12-point corner, for a
+// panel that is not a menu, as the typography popover.
+func popoverPanel(t *ui.Theme) func(ui.Element) {
+	return panelFace(t, popoverRadius)
+}
+
+func panelFace(t *ui.Theme, radius float32) func(ui.Element) {
 	return func(panel ui.Element) {
-		panel.Background(menuFace(t)).Radius(apple.RadiusPopover).
+		panel.Background(menuFace(t)).Radius(radius).
 			NoShadow().Shadow(0, 10, 28, 0, ui.RGBA(0, 0, 0, 0.22)).
 			BorderWidth(0)
+		if t.Dark {
+			panel.Border(1, ui.RGBA(255, 255, 255, 0.12))
+		}
+	}
+}
+
+// explanationPanel is the docked explanation's surface: the HIG menu
+// material with a popover's corner, but flat, since it sits in the pane's
+// flow and a shadow below it would be cut off by the window's edge.
+func explanationPanel(t *ui.Theme) func(ui.Element) {
+	return func(panel ui.Element) {
+		panel.Background(menuFace(t)).Radius(popoverRadius).BorderWidth(0)
 		if t.Dark {
 			panel.Border(1, ui.RGBA(255, 255, 255, 0.12))
 		}
@@ -78,9 +100,9 @@ func hairline(c *ui.Context, t *ui.Theme) {
 // bottom, so its overlay scroll bar keeps its rounded end clear of the
 // window's corner instead of running under it.
 func scrollPane(c *ui.Context, build func()) {
-	body := ui.Column(c).Grow(1).FillWidth().Padding(0, 0, apple.SpaceL, 0)
+	body := ui.Column(c).Grow(1).FillWidth().MinHeight(0).Padding(0, 0, apple.SpaceL, 0)
 	body.Children(func() {
-		ui.Scroll(c).Grow(1).FillWidth().Children(build)
+		ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Children(build)
 	})
 }
 
@@ -462,9 +484,8 @@ func (a *App) typographyButton(c *ui.Context) {
 		}
 	}
 	ui.PopoverBase(c, b, &a.TypographyOpen, func(panel ui.Element) {
-		panel.Width(300).Padding(apple.SpaceL).Gap(apple.SpaceL).
-			Background(menuFace(t)).Radius(popoverRadius).
-			NoShadow().Shadow(0, 10, 28, 0, ui.RGBA(0, 0, 0, 0.22))
+		panel.Width(300).Padding(apple.SpaceL).Gap(apple.SpaceL)
+		popoverPanel(t)(panel)
 		panel.Children(func() {
 			ui.Text(c, "Reading Type").FontSize(apple.FontHeadline).Bold().
 				TextColor(t.Text)

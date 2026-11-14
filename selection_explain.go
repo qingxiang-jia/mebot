@@ -295,45 +295,53 @@ func (a *App) renderSelectionExplanation(c *ui.Context, source string) {
 	}
 	t := c.Theme()
 
-	card := ui.Column(c).AlignItems(ui.Stretch).FillWidth().Shrink(0).Gap(6).
-		Padding(apple.SpaceL).Margin(0, apple.SpaceXL, apple.SpaceXL, apple.SpaceXL).
-		Radius(apple.RadiusCard).Background(t.Surface).Border(1, t.Border)
-	card.Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(apple.Space).Children(func() {
-			ui.Text(c, "“"+clipRunes(strings.TrimSpace(a.SelectionText), 120)+"”").
-				Font(a.CurrentFontFamily()).FontSize(apple.FontSubheadline).
-				TextColor(t.TextMuted).MaxLines(1).Grow(1)
+	// The card sits in a padded wrapper rather than carrying a margin of its
+	// own: a filled element's 100% width does not subtract a margin, so a
+	// right margin would push the card past the pane's edge and clip it.
+	outer := ui.Column(c).FillWidth().Shrink(0).
+		Padding(0, apple.SpaceXL, apple.SpaceXL, apple.SpaceXL)
+	outer.Children(func() {
+		card := ui.Column(c).AlignItems(ui.Stretch).FillWidth().Shrink(0).Gap(6).
+			Padding(apple.SpaceL)
+		explanationPanel(t)(card)
+		card.Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(apple.Space).Children(func() {
+				ui.Icon(c, iconSparkle).FontSize(11).Shrink(0).TextColor(t.TextMuted)
+				ui.Text(c, "“"+clipRunes(strings.TrimSpace(a.SelectionText), 120)+"”").
+					Font(a.CurrentFontFamily()).FontSize(apple.FontSubheadline).
+					TextColor(t.TextMuted).SingleLine().Grow(1)
 
-			close := ui.ButtonBase(c.Key("close-explanation")).Label("Close explanation").
-				Tooltip("Close explanation").Width(20).Height(20).Padding(0).Shrink(0).
-				Justify(ui.Center).AlignItems(ui.Center).Radius(t.Radius)
-			if close.Hovered() {
-				close.Background(t.SurfaceHover)
-			}
-			close.Children(func() {
-				ui.Icon(c, iconClose).FontSize(11).TextColor(t.TextMuted)
+				close := ui.ButtonBase(c.Key("close-explanation")).Label("Close explanation").
+					Tooltip("Close explanation").Width(20).Height(20).Padding(0).Shrink(0).
+					Justify(ui.Center).AlignItems(ui.Center).Radius(t.Radius)
+				if close.Hovered() {
+					close.Background(t.SurfaceHover)
+				}
+				close.Children(func() {
+					ui.Icon(c, iconClose).FontSize(11).TextColor(t.TextMuted)
+				})
+				if close.Clicked() {
+					a.closeSelectionExplanation()
+				}
 			})
-			if close.Clicked() {
-				a.closeSelectionExplanation()
+			if a.SelectionClosed {
+				return
+			}
+
+			switch {
+			case a.SelectionError != "":
+				ui.Text(c, a.SelectionError).Font(a.CurrentFontFamily()).
+					FontSize(a.CurrentFontSize()).TextColor(t.Danger)
+			case a.SelectionExplanation != "":
+				ui.Text(c, a.SelectionExplanation).Font(a.CurrentFontFamily()).
+					FontSize(a.CurrentFontSize()).LineHeight(1.5).Pretty().TextColor(t.Text)
+			default:
+				ui.Row(c).AlignItems(ui.Center).Gap(apple.Space).Children(func() {
+					ui.Spinner(c)
+					ui.Text(c, "Explaining...").FontSize(a.CurrentFontSize()).
+						TextColor(t.TextMuted)
+				})
 			}
 		})
-		if a.SelectionClosed {
-			return
-		}
-
-		switch {
-		case a.SelectionError != "":
-			ui.Text(c, a.SelectionError).Font(a.CurrentFontFamily()).
-				FontSize(a.CurrentFontSize()).TextColor(t.Danger)
-		case a.SelectionExplanation != "":
-			ui.Text(c, a.SelectionExplanation).Font(a.CurrentFontFamily()).
-				FontSize(a.CurrentFontSize()).LineHeight(1.5).Pretty().TextColor(t.Text)
-		default:
-			ui.Row(c).AlignItems(ui.Center).Gap(apple.Space).Children(func() {
-				ui.Spinner(c)
-				ui.Text(c, "Explaining...").FontSize(a.CurrentFontSize()).
-					TextColor(t.TextMuted)
-			})
-		}
 	})
 }
