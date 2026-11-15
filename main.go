@@ -889,6 +889,7 @@ func (a *App) PerformExportTo(outPath string) {
 		a.ExportError = "Choose a project and a destination folder before exporting."
 		return
 	}
+	outPath = expandHome(strings.TrimSpace(outPath))
 
 	cur := a.CurrentArticle()
 	if cur != nil && a.SummaryDoc != nil && !a.ShowMarkdownRender {

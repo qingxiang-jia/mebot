@@ -97,6 +97,23 @@ func ValidateProjectName(name string) error {
 	return nil
 }
 
+// expandHome resolves a leading "~" typed into a path field. The shell is
+// not there to do it, and filepath.Join would otherwise treat "~" as an
+// ordinary directory name.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
+}
+
 func DiscoverProjects() []string {
 	dir := StateDir()
 	entries, err := os.ReadDir(dir)

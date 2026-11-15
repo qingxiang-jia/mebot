@@ -192,3 +192,22 @@ func TestValidateProjectName(t *testing.T) {
 		}
 	}
 }
+
+func TestExpandHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	for in, want := range map[string]string{
+		"~":           home,
+		"~/Docs/a.md": filepath.Join(home, "Docs", "a.md"),
+		"/tmp/a.md":   "/tmp/a.md",
+		"relative.md": "relative.md",
+		"~other/a.md": "~other/a.md",
+		"~/":          home,
+		"not~/a.md":   "not~/a.md",
+	} {
+		if got := expandHome(in); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
