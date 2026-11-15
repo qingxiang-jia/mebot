@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,8 @@ type App struct {
 	mdOpts             markdown.Options
 
 	LastSavedAt   string
+	LastSaveError string
+	SettingsError string
 	IsDirty       bool
 	debounceTimer *time.Timer
 	saveMu        sync.Mutex
@@ -61,6 +64,8 @@ type App struct {
 	// Dialog & Modal State
 	ShowExportModal          bool
 	ExportDirectory          string
+	ExportError              string
+	ProjectNameError         string
 	ShowDeleteProjectConfirm bool
 	ShowDeleteArticleConfirm bool
 	ShowNewProjectModal      bool
@@ -265,6 +270,19 @@ func (a *App) CurrentArticle() *Article {
 	return nil
 }
 
+// chosenArticleIndexes returns the chosen rows in list order. Selection.All
+// iterates a map, so copying or saving the selection needs this order.
+func (a *App) chosenArticleIndexes() []int {
+	idxs := make([]int, 0, a.ChosenArticles.Len())
+	for idx := range a.ChosenArticles.All() {
+		if idx >= 0 && idx < len(a.Articles) {
+			idxs = append(idxs, idx)
+		}
+	}
+	sort.Ints(idxs)
+	return idxs
+}
+
 func (a *App) updateActiveProjectIdx() {
 	for i, p := range a.Projects {
 		if p == a.ActiveProject {
@@ -322,13 +340,10 @@ func (a *App) SelectArticle(newIdx int) {
 }
 
 func (a *App) SaveProjectSelection() {
-	if a.ActiveProject == "" {
+	if a.ActiveProject == "" || a.Settings == nil {
 		return
 	}
-	var selected []int
-	for idx := range a.ChosenArticles.All() {
-		selected = append(selected, idx)
-	}
+	selected := a.chosenArticleIndexes()
 	if a.Settings.ProjectStates == nil {
 		a.Settings.ProjectStates = make(map[string]ProjectSelectionState)
 	}
@@ -337,26 +352,48 @@ func (a *App) SaveProjectSelection() {
 		Selected:  selected,
 	}
 	a.Settings.LastProject = a.ActiveProject
-	_ = a.Settings.Save()
+	a.saveSettings()
 }
 
 func (a *App) RestoreProjectSelection(project string) {
-	if st, ok := a.Settings.ProjectStates[project]; ok {
-		a.ChosenArticles.Clear()
-		for _, idx := range st.Selected {
-			if idx >= 0 && idx < len(a.Articles) {
-				a.ChosenArticles.Add(idx)
+	if a.Settings != nil {
+		if st, ok := a.Settings.ProjectStates[project]; ok {
+			a.ChosenArticles.Clear()
+			for _, idx := range st.Selected {
+				if idx >= 0 && idx < len(a.Articles) {
+					a.ChosenArticles.Add(idx)
+				}
 			}
-		}
-		if st.ActiveIdx >= 0 && st.ActiveIdx < len(a.Articles) {
-			a.SelectArticle(st.ActiveIdx)
-			return
+			if st.ActiveIdx >= 0 && st.ActiveIdx < len(a.Articles) {
+				a.SelectArticle(st.ActiveIdx)
+				return
+			}
 		}
 	}
 	a.ChosenArticles.Clear()
 	if len(a.Articles) > 0 {
 		a.SelectArticle(0)
+		return
 	}
+	// The previous project's editor and summary must not linger behind an
+	// empty project.
+	a.ActiveIdx = 0
+	a.LastActiveIdx = -1
+	a.initSummaryDoc("")
+}
+
+// saveSettings persists the settings, keeping a failure visible in the
+// toolbar instead of silently dropping it. It is separate from the project
+// save error so one cannot hide the other.
+func (a *App) saveSettings() {
+	if a.Settings == nil {
+		return
+	}
+	if err := a.Settings.Save(); err != nil {
+		a.SettingsError = err.Error()
+		return
+	}
+	a.SettingsError = ""
 }
 
 func (a *App) TriggerDebouncedSave() {
@@ -369,7 +406,9 @@ func (a *App) TriggerDebouncedSave() {
 	}
 
 	a.debounceTimer = time.AfterFunc(3*time.Second, func() {
-		a.SaveNow()
+		// SaveNow reads the article and summary state the window owns, so
+		// run it where the window builds rather than on the timer goroutine.
+		a.updateUI(a.SaveNow)
 	})
 }
 
@@ -379,6 +418,7 @@ func (a *App) SaveNow() {
 
 	if a.debounceTimer != nil {
 		a.debounceTimer.Stop()
+		a.debounceTimer = nil
 	}
 
 	cur := a.CurrentArticle()
@@ -387,9 +427,16 @@ func (a *App) SaveNow() {
 	}
 
 	if a.ActiveProject != "" {
-		_ = SaveProjectState(a.ActiveProject, a.Articles)
-		a.LastSavedAt = time.Now().Format("15:04:05")
-		a.IsDirty = false
+		if err := SaveProjectState(a.ActiveProject, a.Articles); err != nil {
+			// Keep the dirty state so the next edit retries, and tell the
+			// toolbar instead of claiming the project was saved.
+			a.LastSaveError = err.Error()
+			a.IsDirty = true
+		} else {
+			a.LastSavedAt = time.Now().Format("15:04:05")
+			a.LastSaveError = ""
+			a.IsDirty = false
+		}
 	}
 	a.SaveProjectSelection()
 }
@@ -402,8 +449,12 @@ func (a *App) SwitchProject(newProject string) {
 	a.clearSelectionExplanation()
 
 	if a.ActiveProject != "" && a.ActiveProject != newProject && a.IsDirty {
-		_ = SaveProjectState(a.ActiveProject, a.Articles)
-		a.IsDirty = false
+		if err := SaveProjectState(a.ActiveProject, a.Articles); err != nil {
+			a.LastSaveError = err.Error()
+		} else {
+			a.LastSaveError = ""
+			a.IsDirty = false
+		}
 	}
 
 	a.ActiveProject = newProject
@@ -425,9 +476,11 @@ func (a *App) SwitchProject(newProject string) {
 
 func (a *App) CreateProject(name string) {
 	name = strings.TrimSpace(name)
-	if name == "" {
+	if err := ValidateProjectName(name); err != nil {
+		a.ProjectNameError = err.Error()
 		return
 	}
+	a.ProjectNameError = ""
 	for _, p := range a.Projects {
 		if p == name {
 			a.SwitchProject(name)
@@ -440,7 +493,9 @@ func (a *App) CreateProject(name string) {
 	a.SwitchProject(name)
 
 	// Immediately save the project file and update settings so DiscoverProjects() finds it on next launch
-	_ = SaveProjectState(name, a.Articles)
+	if err := SaveProjectState(name, a.Articles); err != nil {
+		a.LastSaveError = err.Error()
+	}
 	a.SaveProjectSelection()
 
 	a.NewProjectName = ""
@@ -449,24 +504,42 @@ func (a *App) CreateProject(name string) {
 
 func (a *App) RenameActiveProject(newName string) {
 	newName = strings.TrimSpace(newName)
-	if newName == "" || newName == a.ActiveProject {
+	if newName == a.ActiveProject {
 		a.ShowRenameProjectModal = false
+		return
+	}
+	if err := ValidateProjectName(newName); err != nil {
+		a.ProjectNameError = err.Error()
 		return
 	}
 
 	oldName := a.ActiveProject
+	if oldName == "" {
+		a.ProjectNameError = "There is no project to rename."
+		return
+	}
 	for _, p := range a.Projects {
 		if p == newName {
+			a.ProjectNameError = fmt.Sprintf("A project named %q already exists.", newName)
 			return
 		}
 	}
 
-	oldPath := ProjectFilePath(oldName)
 	newPath := ProjectFilePath(newName)
+	if _, err := os.Stat(newPath); err == nil {
+		a.ProjectNameError = fmt.Sprintf("A project file named %q already exists.", newName)
+		return
+	}
+
+	oldPath := ProjectFilePath(oldName)
 	if _, err := os.Stat(oldPath); err == nil {
-		_ = os.Rename(oldPath, newPath)
-	} else {
-		_ = SaveProjectState(newName, a.Articles)
+		if err := os.Rename(oldPath, newPath); err != nil {
+			a.ProjectNameError = fmt.Sprintf("Could not rename the project: %v", err)
+			return
+		}
+	} else if err := SaveProjectState(newName, a.Articles); err != nil {
+		a.ProjectNameError = fmt.Sprintf("Could not save the project: %v", err)
+		return
 	}
 
 	for i, p := range a.Projects {
@@ -476,14 +549,17 @@ func (a *App) RenameActiveProject(newName string) {
 		}
 	}
 
-	if st, ok := a.Settings.ProjectStates[oldName]; ok {
-		a.Settings.ProjectStates[newName] = st
-		delete(a.Settings.ProjectStates, oldName)
+	if a.Settings != nil {
+		if st, ok := a.Settings.ProjectStates[oldName]; ok {
+			a.Settings.ProjectStates[newName] = st
+			delete(a.Settings.ProjectStates, oldName)
+		}
+		a.Settings.LastProject = newName
+		a.saveSettings()
 	}
 	a.ActiveProject = newName
 	a.updateActiveProjectIdx()
-	a.Settings.LastProject = newName
-	_ = a.Settings.Save()
+	a.ProjectNameError = ""
 
 	a.ShowRenameProjectModal = false
 }
@@ -496,8 +572,12 @@ func (a *App) DeleteActiveProject() {
 	a.clearSelectionExplanation()
 
 	target := a.ActiveProject
-	_ = RemoveProjectState(target)
-	delete(a.Settings.ProjectStates, target)
+	if err := RemoveProjectState(target); err != nil && !os.IsNotExist(err) {
+		a.LastSaveError = fmt.Sprintf("Could not delete the project file: %v", err)
+	}
+	if a.Settings != nil {
+		delete(a.Settings.ProjectStates, target)
+	}
 
 	var updated []string
 	for _, p := range a.Projects {
@@ -518,41 +598,64 @@ func (a *App) DeleteActiveProject() {
 		a.ActiveProject = ""
 		a.LastSavedAt = ""
 		a.IsDirty = false
-		a.Settings.LastProject = ""
-		_ = a.Settings.Save()
+		if a.Settings != nil {
+			a.Settings.LastProject = ""
+		}
 	}
+	// Persist the removal even when the project that replaced it had no
+	// articles, so a restart cannot restore the deleted project.
+	a.saveSettings()
 	a.ShowDeleteProjectConfirm = false
 }
 
 func (a *App) ConfirmDeleteChosenArticles() {
 	a.cancelArticleAISummary()
 	a.clearSelectionExplanation()
-	if a.ChosenArticles.Len() == 0 && a.CurrentArticle() != nil {
-		idx := a.ActiveIdx
-		a.Articles = append(a.Articles[:idx], a.Articles[idx+1:]...)
+
+	// Keep the active article selected when it survives the deletion, even
+	// if the rows before it shift.
+	active := a.CurrentArticle()
+	toDelete := make(map[int]bool)
+	if a.ChosenArticles.Len() == 0 && active != nil {
+		toDelete[a.ActiveIdx] = true
 	} else {
-		toDelete := make(map[int]bool)
 		for idx := range a.ChosenArticles.All() {
 			toDelete[idx] = true
 		}
-		var remaining []*Article
-		for i, art := range a.Articles {
-			if !toDelete[i] {
-				remaining = append(remaining, art)
-			}
-		}
-		a.Articles = remaining
 	}
 
+	var remaining []*Article
+	for i, art := range a.Articles {
+		if !toDelete[i] {
+			remaining = append(remaining, art)
+		}
+	}
+	a.Articles = remaining
+
+	next := a.ActiveIdx
+	if active != nil {
+		for i, art := range a.Articles {
+			if art == active {
+				next = i
+				break
+			}
+		}
+	}
+	if next >= len(a.Articles) {
+		next = len(a.Articles) - 1
+	}
+	if next < 0 {
+		next = 0
+	}
+	a.ActiveIdx = next
+
 	a.ChosenArticles.Clear()
-	if a.ActiveIdx >= len(a.Articles) {
-		a.ActiveIdx = len(a.Articles) - 1
-	}
-	if a.ActiveIdx < 0 {
-		a.ActiveIdx = 0
-	}
 	a.LastActiveIdx = -1
-	a.SelectArticle(a.ActiveIdx)
+	if len(a.Articles) > 0 {
+		a.SelectArticle(a.ActiveIdx)
+	} else {
+		a.initSummaryDoc("")
+	}
 	a.SaveNow()
 	a.ShowDeleteArticleConfirm = false
 }
@@ -567,11 +670,9 @@ func writeClipboardText(text string) {
 
 func (a *App) CopySelectedTitles() {
 	var titles []string
-	if a.ChosenArticles.Len() > 0 {
-		for idx := range a.ChosenArticles.All() {
-			if idx >= 0 && idx < len(a.Articles) {
-				titles = append(titles, a.Articles[idx].Title)
-			}
+	if idxs := a.chosenArticleIndexes(); len(idxs) > 0 {
+		for _, idx := range idxs {
+			titles = append(titles, a.Articles[idx].Title)
 		}
 	} else if a.CurrentArticle() != nil {
 		titles = append(titles, a.CurrentArticle().Title)
@@ -583,18 +684,12 @@ func (a *App) CopySelectedTitles() {
 
 func (a *App) CopySelectedContents() {
 	var sb strings.Builder
-	hasAny := false
-	if a.ChosenArticles.Len() > 0 {
-		for idx := range a.ChosenArticles.All() {
-			if idx >= 0 && idx < len(a.Articles) {
-				art := a.Articles[idx]
-				sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", art.Title, art.FullText))
-				hasAny = true
-			}
+	if idxs := a.chosenArticleIndexes(); len(idxs) > 0 {
+		for _, idx := range idxs {
+			art := a.Articles[idx]
+			sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", art.Title, art.FullText))
 		}
-	}
-	if !hasAny && a.CurrentArticle() != nil {
-		art := a.CurrentArticle()
+	} else if art := a.CurrentArticle(); art != nil {
 		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n", art.Title, art.FullText))
 	}
 	if sb.Len() > 0 {
@@ -604,24 +699,16 @@ func (a *App) CopySelectedContents() {
 
 func (a *App) CopySelectedSummaries() {
 	var sb strings.Builder
-	hasAny := false
-	if a.ChosenArticles.Len() > 0 {
-		for idx := range a.ChosenArticles.All() {
-			if idx >= 0 && idx < len(a.Articles) {
-				art := a.Articles[idx]
-				if IsSummaryEmpty(art.Summary) {
-					continue
-				}
-				sb.WriteString(fmt.Sprintf("# %s\n\n%s\n\n", art.Title, strings.TrimSpace(art.Summary)))
-				hasAny = true
+	if idxs := a.chosenArticleIndexes(); len(idxs) > 0 {
+		for _, idx := range idxs {
+			art := a.Articles[idx]
+			if IsSummaryEmpty(art.Summary) {
+				continue
 			}
-		}
-	}
-	if !hasAny && a.CurrentArticle() != nil {
-		art := a.CurrentArticle()
-		if !IsSummaryEmpty(art.Summary) {
 			sb.WriteString(fmt.Sprintf("# %s\n\n%s\n\n", art.Title, strings.TrimSpace(art.Summary)))
 		}
+	} else if art := a.CurrentArticle(); art != nil && !IsSummaryEmpty(art.Summary) {
+		sb.WriteString(fmt.Sprintf("# %s\n\n%s\n\n", art.Title, strings.TrimSpace(art.Summary)))
 	}
 	if sb.Len() > 0 {
 		writeClipboardText(sb.String())
@@ -631,16 +718,16 @@ func (a *App) CopySelectedSummaries() {
 // CanCopySummaries reports whether any article CopySelectedSummaries would
 // copy has a summary.
 func (a *App) CanCopySummaries() bool {
-	if a.ChosenArticles.Len() == 0 {
-		cur := a.CurrentArticle()
-		return cur != nil && !IsSummaryEmpty(cur.Summary)
-	}
-	for idx := range a.ChosenArticles.All() {
-		if idx >= 0 && idx < len(a.Articles) && !IsSummaryEmpty(a.Articles[idx].Summary) {
-			return true
+	if idxs := a.chosenArticleIndexes(); len(idxs) > 0 {
+		for _, idx := range idxs {
+			if !IsSummaryEmpty(a.Articles[idx].Summary) {
+				return true
+			}
 		}
+		return false
 	}
-	return false
+	cur := a.CurrentArticle()
+	return cur != nil && !IsSummaryEmpty(cur.Summary)
 }
 
 // SelectAllArticles chooses every article of the project.
@@ -714,6 +801,8 @@ func (a *App) ImportHTMLFiles() {
 			art, err := ExtractArticleFromHTML(f)
 			if err == nil {
 				parsed = append(parsed, art)
+			} else {
+				log.Printf("mebot: could not import %s: %v", filepath.Base(f), err)
 			}
 		}
 
@@ -746,11 +835,17 @@ func (a *App) ImportMarkdownFile() {
 
 		data, err := os.ReadFile(paths[0])
 		if err != nil {
+			log.Printf("mebot: could not read %s: %v", filepath.Base(paths[0]), err)
 			return
 		}
 
 		parsed, err := ParseMarkdownRollup(string(data))
-		if err != nil || len(parsed) == 0 {
+		if err != nil {
+			log.Printf("mebot: could not parse %s: %v", filepath.Base(paths[0]), err)
+			return
+		}
+		if len(parsed) == 0 {
+			log.Printf("mebot: no articles found in %s", filepath.Base(paths[0]))
 			return
 		}
 
@@ -783,7 +878,7 @@ func (a *App) BrowseExportDirectory() {
 			a.win.Update(func() {
 				a.ExportDirectory = paths[0]
 				a.Settings.ExportDirectory = paths[0]
-				_ = a.Settings.Save()
+				a.saveSettings()
 			})
 		}
 	}()
@@ -791,7 +886,7 @@ func (a *App) BrowseExportDirectory() {
 
 func (a *App) PerformExportTo(outPath string) {
 	if a.ActiveProject == "" || strings.TrimSpace(outPath) == "" {
-		a.ShowExportModal = false
+		a.ExportError = "Choose a project and a destination folder before exporting."
 		return
 	}
 
@@ -801,19 +896,24 @@ func (a *App) PerformExportTo(outPath string) {
 	}
 
 	md := SerializeToMarkdown(a.Articles)
-	_ = os.MkdirAll(filepath.Dir(outPath), 0755)
-	_ = os.WriteFile(outPath, []byte(md), 0644)
+	if err := writeFileAtomic(outPath, []byte(md), 0644); err != nil {
+		a.ExportError = fmt.Sprintf("Could not write %s: %v", outPath, err)
+		return
+	}
 
+	a.ExportError = ""
 	a.SaveNow()
-	a.Settings.ExportDirectory = a.ExportDirectory
-	_ = a.Settings.Save()
+	if a.Settings != nil {
+		a.Settings.ExportDirectory = a.ExportDirectory
+		a.saveSettings()
+	}
 	a.ShowExportModal = false
 }
 
 func (a *App) ToggleTheme() {
 	a.IsDarkMode = !a.IsDarkMode
 	a.Settings.IsDarkMode = a.IsDarkMode
-	_ = a.Settings.Save()
+	a.saveSettings()
 
 	if a.IsDarkMode {
 		mygo.Theme.SetSource(mygo.ThemeDark)
@@ -909,9 +1009,11 @@ func (a *App) updateUI(fn func()) {
 
 // RefreshLocalLLMStatus checks the local server without blocking the UI. It
 // leaves the current phase alone while the service is starting or stopping,
-// so a poll cannot overwrite an explicit action.
+// so a poll cannot overwrite an explicit action. The poll runs on a timer,
+// so it redraws only when the phase actually changes rather than rebuilding
+// the window every few seconds.
 func (a *App) RefreshLocalLLMStatus() {
-	a.updateUI(func() {
+	mygo.RunOnMain(func() {
 		if a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "stopping" {
 			return
 		}
@@ -920,23 +1022,33 @@ func (a *App) RefreshLocalLLMStatus() {
 
 		go func() {
 			healthy := LocalLLMHealthy()
-			a.updateUI(func() {
+			mygo.RunOnMain(func() {
 				if a.localLLMRunID != runID {
 					return
 				}
 				if a.LocalLLMPhase == "starting" || a.LocalLLMPhase == "stopping" {
 					return
 				}
+
+				changed := false
 				if healthy {
-					a.LocalLLMPhase = "ready"
-					a.LocalLLMError = ""
+					if a.LocalLLMPhase != "ready" || a.LocalLLMError != "" {
+						a.LocalLLMPhase = "ready"
+						a.LocalLLMError = ""
+						changed = true
+					}
 				} else {
 					if a.LocalLLMPhase == "ready" {
 						a.clearSelectionExplanation()
+						changed = true
 					}
-					if a.LocalLLMPhase != "error" {
+					if a.LocalLLMPhase != "error" && a.LocalLLMPhase != "off" {
 						a.LocalLLMPhase = "off"
+						changed = true
 					}
+				}
+				if changed && a.win != nil {
+					a.win.Invalidate()
 				}
 			})
 		}()
@@ -1164,7 +1276,7 @@ func (a *App) SaveSettingsModal() {
 	if a.Settings.SummaryPrompt == "" {
 		a.Settings.SummaryPrompt = DefaultSummaryPrompt
 	}
-	_ = a.Settings.Save()
+	a.saveSettings()
 	a.ShowSettingsModal = false
 }
 

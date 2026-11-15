@@ -52,9 +52,14 @@ func ExtractArticleFromHTML(filePath string) (*Article, error) {
 		title = strings.TrimSuffix(base, filepath.Ext(base))
 	}
 
+	fullText := cleanExtractedText(result.ContentText)
+	if fullText == "" {
+		return nil, fmt.Errorf("no article text found in %s", filepath.Base(filePath))
+	}
+
 	return &Article{
 		Title:    title,
-		FullText: cleanExtractedText(result.ContentText),
+		FullText: fullText,
 		Summary:  "",
 		Selected: false,
 	}, nil

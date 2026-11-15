@@ -67,5 +67,5 @@ func (s *AppSettings) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(SettingsFilePath(), data, 0644)
+	return writeFileAtomic(SettingsFilePath(), data, 0644)
 }

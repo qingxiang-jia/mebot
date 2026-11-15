@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -60,32 +61,28 @@ const popoverRadius = 12
 // shadow, not inside a white frame. The dark appearance keeps the one
 // hairline that separates it from the window behind it.
 func menuPanel(t *ui.Theme) func(ui.Element) {
-	return panelFace(t, apple.RadiusPopover)
+	return panelFace(t, apple.RadiusPopover, true)
 }
 
 // popoverPanel is the same surface with a popover's 12-point corner, for a
 // panel that is not a menu, as the typography popover.
 func popoverPanel(t *ui.Theme) func(ui.Element) {
-	return panelFace(t, popoverRadius)
-}
-
-func panelFace(t *ui.Theme, radius float32) func(ui.Element) {
-	return func(panel ui.Element) {
-		panel.Background(menuFace(t)).Radius(radius).
-			NoShadow().Shadow(0, 10, 28, 0, ui.RGBA(0, 0, 0, 0.22)).
-			BorderWidth(0)
-		if t.Dark {
-			panel.Border(1, ui.RGBA(255, 255, 255, 0.12))
-		}
-	}
+	return panelFace(t, popoverRadius, true)
 }
 
 // explanationPanel is the docked explanation's surface: the HIG menu
 // material with a popover's corner, but flat, since it sits in the pane's
 // flow and a shadow below it would be cut off by the window's edge.
 func explanationPanel(t *ui.Theme) func(ui.Element) {
+	return panelFace(t, popoverRadius, false)
+}
+
+func panelFace(t *ui.Theme, radius float32, shadow bool) func(ui.Element) {
 	return func(panel ui.Element) {
-		panel.Background(menuFace(t)).Radius(popoverRadius).BorderWidth(0)
+		panel.Background(menuFace(t)).Radius(radius).BorderWidth(0).NoShadow()
+		if shadow {
+			panel.Shadow(0, 10, 28, 0, ui.RGBA(0, 0, 0, 0.22))
+		}
 		if t.Dark {
 			panel.Border(1, ui.RGBA(255, 255, 255, 0.12))
 		}
@@ -154,7 +151,13 @@ func (a *App) renderToolbar(c *ui.Context) {
 		a.projectMenuButton(c)
 		ui.Row(c).Grow(1)
 
-		if a.IsDirty {
+		if a.LastSaveError != "" {
+			ui.Text(c, "Save Failed").FontSize(apple.FontSubheadline).
+				TextColor(t.Danger).Tooltip("Could not save: " + a.LastSaveError)
+		} else if a.SettingsError != "" {
+			ui.Text(c, "Settings Not Saved").FontSize(apple.FontSubheadline).
+				TextColor(t.Danger).Tooltip("Could not save settings: " + a.SettingsError)
+		} else if a.IsDirty {
 			ui.Text(c, "Saving…").FontSize(apple.FontSubheadline).TextColor(t.Accent)
 		} else if a.LastSavedAt != "" {
 			ui.Text(c, "Saved "+a.LastSavedAt).FontSize(apple.FontSubheadline).
@@ -164,6 +167,7 @@ func (a *App) renderToolbar(c *ui.Context) {
 		a.renderLocalLLMButton(c)
 		a.importMenuButton(c)
 		if toolbarButton(c, "export", "Export", iconShare) {
+			a.ExportError = ""
 			a.ShowExportModal = true
 		}
 		a.moreMenuButton(c)
@@ -212,10 +216,12 @@ func (a *App) buildProjectMenu(m *ui.Menu) {
 	m.Separator()
 	if m.Item("New Project…").Chosen() {
 		a.NewProjectName = ""
+		a.ProjectNameError = ""
 		a.ShowNewProjectModal = true
 	}
 	if m.Item("Rename Project…").Disabled(a.ActiveProject == "").Chosen() {
 		a.RenameProjectName = a.ActiveProject
+		a.ProjectNameError = ""
 		a.ShowRenameProjectModal = true
 	}
 	if m.Item("Delete Project…").Disabled(a.ActiveProject == "").Danger().Chosen() {
@@ -496,7 +502,7 @@ func (a *App) typographyButton(c *ui.Context) {
 					Font(a.CurrentFontFamily()).FontSize(a.CurrentFontSize()).
 					LineHeight(1.35).MaxLines(6).TextColor(t.Text)
 				ui.Text(c, fmt.Sprintf("%s · %s pt", a.SelectedFont, a.SelectedFontSize)).
-					FontSize(apple.FontCaption).TextColor(t.TextMuted)
+					FontSize(apple.FontFootnote).TextColor(t.TextMuted)
 			})
 
 			ui.Column(c).FillWidth().Gap(apple.Space).Children(func() {
@@ -531,7 +537,7 @@ func (a *App) fontSizeMenuButton(c *ui.Context) {
 			if m.Item(size).Radio(size == a.SelectedFontSize).Chosen() && size != a.SelectedFontSize {
 				a.SelectedFontSize = size
 				a.Settings.FontSize = size
-				_ = a.Settings.Save()
+				a.saveSettings()
 			}
 		}
 	}, ui.PopoverMenuButtonOptions{
@@ -734,7 +740,7 @@ func (a *App) sheetRow(c *ui.Context, t *ui.Theme, label, note string, control f
 		col.Children(func() {
 			ui.Text(c, label).FontSize(apple.FontBody).TextColor(t.Text)
 			if note != "" {
-				ui.Text(c, note).FontSize(apple.FontCaption).TextColor(t.TextMuted)
+				ui.Text(c, note).FontSize(apple.FontFootnote).TextColor(t.TextMuted)
 			}
 		})
 		control()
@@ -779,6 +785,10 @@ func (a *App) newProjectSheet(c *ui.Context) {
 				AutoFocus().Placeholder("Project name...").Submitted() {
 				a.CreateProject(a.NewProjectName)
 			}
+			if a.ProjectNameError != "" {
+				ui.Text(c, a.ProjectNameError).FontSize(apple.FontSubheadline).
+					TextColor(t.Danger)
+			}
 		})
 		a.sheetFooter(c, t, "Cancel", func() { a.ShowNewProjectModal = false },
 			"Create", func() { a.CreateProject(a.NewProjectName) }, false)
@@ -796,6 +806,10 @@ func (a *App) renameProjectSheet(c *ui.Context) {
 			if ui.TextInput(c.Key("renameProjInput"), &a.RenameProjectName).
 				AutoFocus().Placeholder("New project name...").Submitted() {
 				a.RenameActiveProject(a.RenameProjectName)
+			}
+			if a.ProjectNameError != "" {
+				ui.Text(c, a.ProjectNameError).FontSize(apple.FontSubheadline).
+					TextColor(t.Danger)
 			}
 		})
 		a.sheetFooter(c, t, "Cancel", func() { a.ShowRenameProjectModal = false },
@@ -827,6 +841,9 @@ func (a *App) exportSheet(c *ui.Context) {
 				ui.Text(c, name).FontSize(apple.FontBody).TextColor(t.Text)
 			})
 		})
+		if a.ExportError != "" {
+			ui.Text(c, a.ExportError).FontSize(apple.FontSubheadline).TextColor(t.Danger)
+		}
 		a.sheetFooter(c, t, "Cancel", func() { a.ShowExportModal = false }, "Export", func() {
 			name := fmt.Sprintf("%s %s.md", a.SelectedDate.Format("2006-01-02"), a.ActiveProject)
 			a.PerformExportTo(filepath.Join(a.ExportDirectory, name))
@@ -952,5 +969,16 @@ func (a *App) prepareWindow(win *mygo.Window) {
 	win.OnUnmaximize(func() {
 		a.WindowMaximized = false
 		win.Invalidate()
+	})
+	// The debounced save may still be pending when the window closes, so
+	// flush it here instead of losing the last edit.
+	win.OnClose(func(*mygo.CloseEvent) {
+		a.SaveNow()
+		if a.LastSaveError != "" {
+			log.Printf("mebot: could not save while closing: %s", a.LastSaveError)
+		}
+		if a.SettingsError != "" {
+			log.Printf("mebot: could not save settings while closing: %s", a.SettingsError)
+		}
 	})
 }

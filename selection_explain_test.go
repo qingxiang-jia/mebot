@@ -100,6 +100,44 @@ func TestSelectionExplanationCard(t *testing.T) {
 	}
 }
 
+// TestSelectionExplanationCardFitsInsideThePane guards the card's insets.
+// A filled element's margin is not subtracted from its width, so the card
+// used to run past the pane's right edge and clip the close button.
+func TestSelectionExplanationCardFitsInsideThePane(t *testing.T) {
+	const width, height = 700, 400
+	a := &App{
+		SelectionText:        "take stock",
+		SelectionSource:      "fulltext",
+		SelectionExplanation: "to review the situation before deciding what to do next",
+		LocalLLMPhase:        "ready",
+		SelectedFontSize:     "16",
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Clip().Children(func() {
+			scrollPane(c, func() { ui.Text(c, "Body text.") })
+			a.renderSelectionExplanation(c, "fulltext")
+		})
+	}, width, height)
+
+	closeBox, ok := tt.Find("Close explanation")
+	if !ok {
+		t.Fatalf("the card has no close button: %q", tt.Texts())
+	}
+	// The pane's 16pt inset plus the card's own 8pt padding, and a pixel
+	// of rounding.
+	if right := closeBox.X + closeBox.W; right > width-16-8+0.5 {
+		t.Errorf("the close button ends at %.1f, past the card's right inset", right)
+	}
+
+	answer, ok := tt.Find("to review the situation before deciding what to do next")
+	if !ok {
+		t.Fatalf("the card shows no explanation: %q", tt.Texts())
+	}
+	if bottom := answer.Y + answer.H; bottom > height-16-8+0.5 {
+		t.Errorf("the explanation ends at %.1f, past the pane's bottom inset", bottom)
+	}
+}
+
 func TestSelectionExplanationCardCanBeClosed(t *testing.T) {
 	a := &App{
 		SelectionText:        "take stock",

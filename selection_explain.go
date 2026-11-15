@@ -195,7 +195,7 @@ func (a *App) maybeStartSelectionExplanation() {
 	a.SelectionExplanation = ""
 	a.selectionExplainTimer = time.AfterFunc(selectionExplanationDelay, func() {
 		a.updateUI(func() {
-			if a.selectionKey != key {
+			if a.selectionKey != key || a.SelectionClosed {
 				return
 			}
 			a.selectionExplainTimer = nil
@@ -208,7 +208,7 @@ func (a *App) maybeStartSelectionExplanation() {
 }
 
 func (a *App) startSelectionExplanation() {
-	if a.SelectionRunning || a.SelectionText == "" || a.LocalLLMPhase != "ready" {
+	if a.SelectionRunning || a.SelectionText == "" || a.SelectionClosed || a.LocalLLMPhase != "ready" {
 		return
 	}
 

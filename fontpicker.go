@@ -63,7 +63,7 @@ func (a *App) fontChooser(c *ui.Context) {
 				if row.Clicked() && a.SelectedFont != font {
 					a.SelectedFont = font
 					a.Settings.FontFamily = font
-					_ = a.Settings.Save()
+					a.saveSettings()
 				}
 			}
 		})
