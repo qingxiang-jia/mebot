@@ -566,8 +566,7 @@ func (a *App) renderSummaryColumn(c *ui.Context) {
 			ui.Row(c).Grow(1)
 
 			ui.Text(c, "Preview").FontSize(apple.FontSubheadline).TextColor(t.TextMuted)
-			ui.Switch(c.Key("summaryPreviewSwitch"), &a.ShowMarkdownRender).
-				Label("Preview")
+			kit.Switch(c, &a.ShowMarkdownRender).Label("Preview")
 
 			if running {
 				if kit.Button(c, "cancel-ai", "Cancel") {
@@ -871,7 +870,7 @@ func (a *App) batchSummarySheet(c *ui.Context) {
 				ui.TextArea(c.Key("batchAreaInput"), &a.BatchPastedMarkdown).
 					Placeholder("## Article Title\nSummary content here...\n\n## Another Article Title\nSummary content here...").
 					Height(240).Grow(1)
-				ui.Checkbox(c.Key("batchIncludeExistingCheck"), &a.BatchIncludeExisting,
+				kit.Checkbox(c, &a.BatchIncludeExisting,
 					"Include articles that already have summaries")
 			})
 			if a.BatchMatchError != "" {
